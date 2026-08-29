@@ -1,0 +1,26 @@
+# Which metadata sources to query, per locally-detected genre — and,
+# where it matters, per individual field. Tune this with
+# `music-match probe` against real tracks rather than guessing; the probe
+# tool's whole purpose is finding which source is actually best for
+# which field, so precedence should reflect that granularity, not just
+# a single per-genre ranking.
+#
+# `order` is the default fallback: fields not explicitly listed under
+# [genres.<name>.fields] use this order. Field overrides only need to
+# list where you've found a field-specific source is meaningfully better
+# or worse than the genre default — no need to repeat every field.
+
+[genres.default]
+order = ["musicbrainz", "spotify", "itunes"]
+
+[genres.electronic]
+order = ["discogs", "musicbrainz", "spotify"]
+
+[genres.electronic.fields]
+remixer = ["discogs", "musicbrainz"]
+mix_name = ["discogs", "musicbrainz"]
+album = ["discogs", "musicbrainz"]
+isrc = ["musicbrainz", "spotify"]
+
+[genres.rnb]
+order = ["spotify", "musicbrainz", "itunes"]
