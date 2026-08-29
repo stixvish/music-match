@@ -34,6 +34,40 @@ AAAcZGF0YQAAAAEAAAAATGF2ZjYzLjEuMTAx
 """
 
 
+def write_m4a(path: pathlib.Path) -> pathlib.Path:
+  """Writes a tiny, untagged M4A file to an arbitrary path.
+
+  Args:
+    path: Where to write it. Parent directories are created.
+
+  Returns:
+    The path written.
+  """
+  path.parent.mkdir(parents=True, exist_ok=True)
+  path.write_bytes(base64.b64decode(_TINY_M4A_BASE64))
+  return path
+
+
+def write_wav(path: pathlib.Path) -> pathlib.Path:
+  """Writes a tiny, untagged WAV file to an arbitrary path.
+
+  mutagen tags WAV with ID3, so this also covers the ID3 code paths.
+
+  Args:
+    path: Where to write it. Parent directories are created.
+
+  Returns:
+    The path written.
+  """
+  path.parent.mkdir(parents=True, exist_ok=True)
+  with wave.open(str(path), "wb") as handle:
+    handle.setnchannels(1)
+    handle.setsampwidth(2)
+    handle.setframerate(8000)
+    handle.writeframes(b"\x00\x00" * 800)
+  return path
+
+
 @pytest.fixture(name="m4a_file")
 def fixture_m4a_file(tmp_path: pathlib.Path) -> pathlib.Path:
   """Writes a tiny, untagged M4A file.
@@ -44,9 +78,7 @@ def fixture_m4a_file(tmp_path: pathlib.Path) -> pathlib.Path:
   Returns:
     Path to the file.
   """
-  path = tmp_path / "track.m4a"
-  path.write_bytes(base64.b64decode(_TINY_M4A_BASE64))
-  return path
+  return write_m4a(tmp_path / "track.m4a")
 
 
 @pytest.fixture(name="wav_file")
@@ -59,10 +91,4 @@ def fixture_wav_file(tmp_path: pathlib.Path) -> pathlib.Path:
   Returns:
     Path to the file.
   """
-  path = tmp_path / "track.wav"
-  with wave.open(str(path), "wb") as handle:
-    handle.setnchannels(1)
-    handle.setsampwidth(2)
-    handle.setframerate(8000)
-    handle.writeframes(b"\x00\x00" * 800)
-  return path
+  return write_wav(tmp_path / "track.wav")
