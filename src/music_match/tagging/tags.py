@@ -10,6 +10,7 @@ narrowed per subclass, so `isinstance(audio, MP3)` does not tell mypy the
 tags exist. Always go through `get_tags`, which asserts explicitly.
 """
 
+import dataclasses
 import pathlib
 from typing import Any, cast
 
@@ -156,20 +157,51 @@ def write_tags(path: pathlib.Path,
     raise TagError(
         f"unsupported tag container {type(container).__name__}: {path}")
 
-  changes = tags.changes_against(current)
+  desired = _reconcile_dates(tags, tags.merged_with(current))
+  changes = desired.changes_against(current)
+  if current.release_date is not None and desired.release_date is None:
+    changes["release_date"] = (current.release_date, None)
   if dry_run or not changes:
     return changes
 
-  merged = tags.merged_with(current)
   if isinstance(container, id3.ID3):
-    _write_id3(container, merged)
+    _write_id3(container, desired)
   else:
-    _write_mp4(container, merged)
+    _write_mp4(container, desired)
   try:
     audio.save()
   except (OSError, mutagen.MutagenError) as err:
     raise TagError(f"could not write {path}: {err}") from err
   return changes
+
+
+def _reconcile_dates(requested: TrackTags, merged: TrackTags) -> TrackTags:
+  """Resolves `year` against `release_date` so the two cannot disagree.
+
+  Both map onto the same underlying field (ID3's TDRC, MP4's `\xa9day`),
+  so a merge that keeps a stale value of one silently discards the other:
+  writing `year=2010` onto a file already carrying a 2009 release date
+  would otherwise report a change it did not make.
+
+  Whichever of the two the caller actually supplied wins. A supplied
+  release date also sets the year; a supplied year that contradicts the
+  existing release date drops that date as stale, since a year is all the
+  caller claims to know.
+
+  Args:
+    requested: The values the caller asked to write.
+    merged: Those values with the file's existing tags filling the gaps.
+
+  Returns:
+    The merged tags with a consistent year and release date.
+  """
+  if requested.release_date is not None:
+    year = _year_from_date(requested.release_date)
+    return dataclasses.replace(merged, year=year or merged.year)
+  if (requested.year is not None and merged.release_date is not None and
+      _year_from_date(merged.release_date) != requested.year):
+    return dataclasses.replace(merged, release_date=None)
+  return merged
 
 
 def _first_text(container: id3.ID3, frame_id: str) -> str | None:
@@ -274,7 +306,7 @@ def _is_full_date(value: str | None) -> bool:
   Returns:
     True if the value looks like "YYYY-MM" or longer.
   """
-  return bool(value) and len(cast(str, value)) > 4
+  return value is not None and len(value) > 4
 
 
 def _read_id3_source_id(container: id3.ID3) -> str | None:
@@ -315,6 +347,10 @@ def _write_id3(container: id3.ID3, tags: TrackTags) -> None:
   if "release_date" in values:
     released = values["release_date"]
     container.setall("TDRL", [id3.TDRL(encoding=3, text=[released])])
+  elif "year" in values:
+    # The year won over a contradicting release date; leaving TDRL behind
+    # would make the file read back as both.
+    container.delall("TDRL")
 
   for frame_id, number, total in (
       ("TRCK", values.get("track_number"), values.get("track_total")),

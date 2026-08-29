@@ -166,3 +166,64 @@ def test_as_dict_hides_unset_fields_by_default() -> None:
   tags = fields.TrackTags(title="Strobe")
   assert tags.as_dict() == {"title": "Strobe"}
   assert set(tags.as_dict(include_empty=True)) == set(fields.ALL_FIELDS)
+
+
+def test_year_overrides_a_contradicting_release_date(
+    audio_file: pathlib.Path) -> None:
+  """Writing a bare year drops a stale release date instead of losing it.
+
+  `year` and `release_date` share one underlying field, so a merge that
+  kept the old date would report a year change it never actually wrote.
+  """
+  tag_io.write_tags(audio_file, fields.TrackTags(release_date="2009-09-22"))
+  changes = tag_io.write_tags(audio_file, fields.TrackTags(year=2010))
+  after = tag_io.read_tags(audio_file)
+
+  assert changes == {
+      "year": (2009, 2010),
+      "release_date": ("2009-09-22", None),
+  }
+  assert after.year == 2010
+  assert after.release_date is None
+
+
+def test_release_date_updates_the_year_it_implies(
+    audio_file: pathlib.Path) -> None:
+  """A new release date carries its year, and reports that as a change."""
+  tag_io.write_tags(audio_file, fields.TrackTags(year=2009))
+  changes = tag_io.write_tags(audio_file,
+                              fields.TrackTags(release_date="2010-05-01"))
+  after = tag_io.read_tags(audio_file)
+
+  assert changes == {
+      "release_date": (None, "2010-05-01"),
+      "year": (2009, 2010),
+  }
+  assert after.year == 2010
+  assert after.release_date == "2010-05-01"
+
+
+def test_matching_year_leaves_the_release_date_alone(
+    audio_file: pathlib.Path) -> None:
+  """A year that agrees with the existing date is not a reason to drop it."""
+  tag_io.write_tags(audio_file, fields.TrackTags(release_date="2009-09-22"))
+  changes = tag_io.write_tags(audio_file, fields.TrackTags(year=2009))
+  assert not changes
+  assert tag_io.read_tags(audio_file).release_date == "2009-09-22"
+
+
+def test_reported_changes_match_the_file(audio_file: pathlib.Path) -> None:
+  """Every reported change is actually true of the file afterwards.
+
+  This is the invariant `tag_history` depends on: a change logged but not
+  written would make `undo` restore a value that never existed.
+  """
+  tag_io.write_tags(audio_file, FULL)
+  update = fields.TrackTags(year=2011, genre="Deep House", track_number=4)
+  changes = tag_io.write_tags(audio_file, update)
+
+  after = tag_io.read_tags(audio_file).as_dict(include_empty=True)
+  before = FULL.as_dict(include_empty=True)
+  for field, (old_value, new_value) in changes.items():
+    assert before[field] == old_value
+    assert after[field] == new_value
