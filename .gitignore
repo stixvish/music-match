@@ -1,10 +1,32 @@
-# Python-generated files
-__pycache__/
-*.py[oc]
-build/
-dist/
-wheels/
-*.egg-info
+# Audio files — never commit the library
+*.wav
+*.aiff
+*.aif
+*.m4a
+*.mp3
+*.flac
 
-# Virtual environments
-.venv
+# Secrets
+.env
+.env.local
+
+# Local state
+*.db
+*.sqlite
+*.sqlite3
+models/
+_review/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+dist/
+build/
+*.egg-info/
+
+# macOS
+.DS_Store

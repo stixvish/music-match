@@ -1,0 +1,10 @@
+# Which folders to scan, and how to treat them.
+# Folders are matched by NAME, not absolute path, so the library can move.
+
+[sources.yt-dlp]
+path = "~/Music/yt-dlp"
+check_for_video_rips = true
+
+[sources.beatport]
+path = "~/Music/beatport"
+check_for_video_rips = false
