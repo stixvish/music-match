@@ -8,3 +8,9 @@ check_for_video_rips = true
 [sources.beatport]
 path = "~/Music/beatport"
 check_for_video_rips = false
+
+# Where the lower-quality copy of a duplicate goes. Audio files are never
+# deleted outright, so dedup moves the loser here instead. Keep this
+# OUTSIDE the source folders above, or the next scan will index it again.
+[duplicates]
+path = "~/Music/_low-quality-duplicates"

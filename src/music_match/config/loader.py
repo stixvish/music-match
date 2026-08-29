@@ -19,6 +19,9 @@ DEFAULT_PRECEDENCE_FILE = pathlib.Path("precedence.toml")
 
 DEFAULT_GENRE_KEY = "default"
 
+# Used when sources.toml does not set [duplicates].path.
+DEFAULT_DUPLICATES_PATH = "~/Music/_low-quality-duplicates"
+
 
 class ConfigError(Exception):
   """Raised when a config file is missing, malformed, or incomplete."""
@@ -42,8 +45,16 @@ class SourceFolder:
 
 @dataclasses.dataclass(frozen=True)
 class SourcesConfig:
-  """All configured source folders, keyed by name."""
+  """All configured source folders, plus where duplicates go.
+
+  Attributes:
+    folders: The configured source folders, keyed by name.
+    duplicates_path: Where the lower-quality copy of a duplicate pair is
+      moved. Audio files are never deleted outright, so dedup needs
+      somewhere to put them.
+  """
   folders: Mapping[str, SourceFolder]
+  duplicates_path: pathlib.Path
 
   def names(self) -> tuple[str, ...]:
     """Returns the configured folder names, in config order."""
@@ -233,7 +244,37 @@ def load_sources(path: pathlib.Path = DEFAULT_SOURCES_FILE) -> SourcesConfig:
         path=pathlib.Path(raw_path).expanduser(),
         check_for_video_rips=check,
     )
-  return SourcesConfig(folders=folders)
+  config = SourcesConfig(folders=folders,
+                         duplicates_path=_duplicates_path(document, path))
+  if config.contains(config.duplicates_path):
+    raise ConfigError(
+        f"[duplicates].path ({config.duplicates_path}) is inside a configured"
+        " source folder; dedup would move files there and the next scan would"
+        " index them straight back in")
+  return config
+
+
+def _duplicates_path(document: dict[str, Any],
+                     path: pathlib.Path) -> pathlib.Path:
+  """Reads [duplicates].path, falling back to the default location.
+
+  Args:
+    document: The parsed sources.toml.
+    path: The config file, used in error messages.
+
+  Returns:
+    Where losing duplicates should be moved to, with `~` expanded.
+
+  Raises:
+    ConfigError: If [duplicates] is present but malformed.
+  """
+  raw = document.get("duplicates", {})
+  if not isinstance(raw, dict):
+    raise ConfigError(f"[duplicates] in {path} must be a table")
+  configured = raw.get("path", DEFAULT_DUPLICATES_PATH)
+  if not isinstance(configured, str) or not configured:
+    raise ConfigError(f"[duplicates].path in {path} must be a non-empty string")
+  return pathlib.Path(configured).expanduser()
 
 
 def load_precedence(

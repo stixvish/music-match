@@ -213,3 +213,41 @@ def test_repo_config_files_load() -> None:
   precedence = loader.load_precedence(loader.DEFAULT_PRECEDENCE_FILE)
   assert "yt-dlp" in sources.folders
   assert precedence.order_for("Electronic")[0] == "discogs"
+
+
+def test_duplicates_path_defaults(tmp_path: pathlib.Path) -> None:
+  """Omitting [duplicates] still yields a usable destination."""
+  path = write(tmp_path, "sources.toml", '[sources.a]\npath = "/music/a"\n')
+  assert loader.load_sources(path).duplicates_path.is_absolute()
+
+
+def test_duplicates_path_is_expanded(tmp_path: pathlib.Path) -> None:
+  """A `~` in the duplicates path is expanded like any other path."""
+  path = write(
+      tmp_path, "sources.toml",
+      '[sources.a]\npath = "/music/a"\n\n[duplicates]\npath = "~/dupes"\n')
+  assert loader.load_sources(
+      path).duplicates_path == pathlib.Path.home() / "dupes"
+
+
+def test_duplicates_path_may_not_sit_inside_a_source_folder(
+    tmp_path: pathlib.Path) -> None:
+  """Otherwise the next scan re-indexes everything dedup just moved out."""
+  path = write(
+      tmp_path, "sources.toml", """
+      [sources.yt-dlp]
+      path = "~/Music/yt-dlp"
+
+      [duplicates]
+      path = "~/Music/yt-dlp/_dupes"
+      """)
+  with pytest.raises(loader.ConfigError, match="inside a configured"):
+    loader.load_sources(path)
+
+
+def test_duplicates_path_rejects_a_bad_type(tmp_path: pathlib.Path) -> None:
+  """A non-string duplicates path is a config error."""
+  path = write(tmp_path, "sources.toml",
+               '[sources.a]\npath = "/music/a"\n\n[duplicates]\npath = 3\n')
+  with pytest.raises(loader.ConfigError, match="non-empty string"):
+    loader.load_sources(path)

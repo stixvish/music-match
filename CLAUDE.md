@@ -37,6 +37,8 @@ See @ARCHITECTURE.md for the full design, pipeline phases, and build order.
 - `src/music_match/tagging/` — fingerprinting, genre detection, matching, tag writing
 - `src/music_match/sources/` — one module per metadata source (discogs, musicbrainz, spotify, itunes)
 - `src/music_match/db/` — SQLite schema and queries
+- `src/music_match/library.py` — walking the configured source folders;
+  the single place enforcing that nothing outside them is touched
 - `src/music_match/config/` — TOML loading for sources.toml and precedence.toml
 - `tests/unit/` — fast, no network, gates commits
 - `tests/integration/` — real API calls, CI only
@@ -96,11 +98,21 @@ PR, not one PR per commit and not several stages bundled into one PR.
    additional commit on the same branch and re-review.
 4. **Record the review formally**, once you're satisfied:
    ```bash
-   gh pr review --approve --body "reviewed: <what you checked, what you
-   found and fixed if anything, why this stage is ready>"
+   gh pr comment --body "## Self-review
+
+   <what you checked, what you found and fixed if anything, why this
+   stage is ready>"
    ```
-   This is a real GitHub approval, visible on the PR — not just a note
-   in the description. It's what "approve the PR" means here.
+   This is a permanent record on the PR — not just a note in the
+   description. It's what "approve the PR" means here.
+
+   **Not `gh pr review --approve`.** GitHub rejects that with *"Can not
+   approve your own pull request"*, and always will in this repo: Claude
+   commits as the repo owner, so the PR author and the reviewer are the
+   same account. There is no way around it and nothing to fix — a
+   comment carries the same information to the same place. Branch
+   protection requires 0 approvals, so this does not affect the merge
+   gate.
 5. **Merge:**
    ```bash
    gh pr merge --auto --squash --delete-branch
@@ -127,10 +139,10 @@ where the real explanation lives.>
 deliberately left out of scope for this stage, follow-ups.>
 ```
 
-The self-review verdict itself goes in the `gh pr review --approve`
-body (step 4 above), not in this description — keeps "what changed"
-and "what was checked before merging" as two distinct, separately
-visible things on the PR.
+The self-review verdict itself goes in the review comment (step 4
+above), not in this description — keeps "what changed" and "what was
+checked before merging" as two distinct, separately visible things on
+the PR.
 
 ## mutagen typing pattern
 
