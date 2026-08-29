@@ -1,19 +1,26 @@
 """The `music-match` command-line entry point.
 
-Only the skeleton commands exist so far: inspecting resolved config,
-creating the database, and dumping a file's tags. Pipeline commands land
-with the pipeline stages they belong to.
+Commands land with the pipeline stage they belong to. So far: inspecting
+resolved config, creating the database, dumping a file's tags,
+fingerprinting the library, and the duplicate scan.
 """
 
 import pathlib
+import shutil
+import sqlite3
 from typing import Annotated, Iterable
 
 import typer
 
 from music_match import __version__
+from music_match import library
 from music_match.config import loader
 from music_match.db import connection
+from music_match.db import queries
 from music_match.db import schema
+from music_match.tagging import dedup as dedup_lib
+from music_match.tagging import fingerprint as fp
+from music_match.tagging import quality as quality_lib
 from music_match.tagging import tags as tag_io
 
 app = typer.Typer(
@@ -37,6 +44,9 @@ PrecedenceOption = Annotated[
     typer.Option("--precedence", help="Path to precedence.toml.")]
 DbOption = Annotated[pathlib.Path,
                      typer.Option("--db", help="Path to the SQLite database.")]
+SourceNameOption = Annotated[
+    str | None,
+    typer.Option("--source", help="Limit to one configured source folder.")]
 DryRunOption = Annotated[bool,
                          typer.Option("--dry-run",
                                       help="Report what would change without "
@@ -184,3 +194,236 @@ def _load_precedence_or_exit(path: pathlib.Path) -> loader.PrecedenceConfig:
   except loader.ConfigError as err:
     typer.echo(f"error: {err}", err=True)
     raise typer.Exit(code=1) from err
+
+
+@app.command("scan")
+def scan(
+    sources: SourcesOption = loader.DEFAULT_SOURCES_FILE,
+    db: DbOption = connection.DEFAULT_DB_FILE,
+    source: SourceNameOption = None,
+    limit: Annotated[
+        int,
+        typer.Option("--limit",
+                     help="Stop after this many files. 0 means no limit.")] = 0,
+    force: Annotated[
+        bool,
+        typer.Option("--force", help="Re-fingerprint files already indexed."
+                    )] = False,
+    dry_run: DryRunOption = False,
+) -> None:
+  """Fingerprints the library and records the results.
+
+  Resumable: files already fingerprinted are skipped unless --force is
+  given, so a run that dies partway is not wasted work.
+
+  Args:
+    sources: Path to sources.toml.
+    db: Path to the SQLite database.
+    source: Limit to one configured source folder.
+    limit: Stop after this many files, or 0 for no limit.
+    force: Re-fingerprint files that already have a fingerprint.
+    dry_run: Report what would be fingerprinted without writing.
+  """
+  sources_config = _load_sources_or_exit(sources)
+  if not fp.have_fpcalc():
+    typer.echo(
+        "error: fpcalc not found on PATH. Install chromaprint (see SETUP.md).",
+        err=True)
+    raise typer.Exit(code=1)
+
+  try:
+    files = list(library.walk(sources_config, source))
+  except KeyError:
+    typer.echo(f"error: no source folder named '{source}' in {sources}",
+               err=True)
+    raise typer.Exit(code=1) from None
+  except FileNotFoundError as err:
+    typer.echo(f"error: {err}", err=True)
+    raise typer.Exit(code=1) from err
+
+  with connection.open_db(db) as conn:
+    done = set() if force else queries.fingerprinted_paths(conn)
+    pending = [item for item in files if str(item.path) not in done]
+    # Counted before --limit truncates, so a limited run does not report
+    # the files it is deferring as ones it had already done.
+    already = len(files) - len(pending)
+    if limit:
+      pending = pending[:limit]
+
+    typer.echo(f"{len(files)} audio files, {already} already fingerprinted, "
+               f"{len(pending)} to do")
+    if dry_run:
+      typer.echo(f"dry run: would fingerprint {len(pending)} files")
+      return
+
+    failures = _fingerprint_all(conn, pending)
+
+  typer.echo(f"fingerprinted {len(pending) - failures}, failed {failures}")
+
+
+def _fingerprint_all(conn: sqlite3.Connection,
+                     pending: list[library.LibraryFile]) -> int:
+  """Fingerprints files and records each result as it completes.
+
+  Committing per file is what makes a long run resumable — an
+  interrupted scan keeps everything it had already done.
+
+  Args:
+    conn: An open database connection.
+    pending: The files to fingerprint.
+
+  Returns:
+    How many files failed.
+  """
+  failures = 0
+  for position, item in enumerate(pending, start=1):
+    try:
+      print_at = position % 50 == 0 or position == len(pending)
+      fingerprint = fp.fingerprint_file(item.path)
+      queries.upsert_track(conn,
+                           path=item.path,
+                           source_name=item.source.name,
+                           fingerprint=fingerprint.encode(),
+                           duration_seconds=fingerprint.duration)
+      conn.commit()
+      if print_at:
+        typer.echo(f"  {position}/{len(pending)}")
+    except fp.FingerprintError as err:
+      failures += 1
+      typer.echo(f"  skipped: {err}", err=True)
+  return failures
+
+
+@app.command("dedup")
+def dedup(
+    sources: SourcesOption = loader.DEFAULT_SOURCES_FILE,
+    db: DbOption = connection.DEFAULT_DB_FILE,
+    source: SourceNameOption = None,
+    threshold: Annotated[
+        float,
+        typer.Option("--threshold",
+                     help="Similarity score at which two tracks are the "
+                     "same recording.")] = dedup_lib.
+    DEFAULT_SIMILARITY_THRESHOLD,
+    apply_moves: Annotated[
+        bool,
+        typer.Option("--apply",
+                     help="Actually move the duplicates. Without this, the "
+                     "scan only reports.")] = False,
+) -> None:
+  """Finds duplicate recordings by fingerprint and moves the losers.
+
+  Reports without touching anything unless --apply is given. The
+  higher-quality copy is kept: lossless beats lossy, then bitrate. The
+  loser is moved to the folder configured under [duplicates], never
+  deleted.
+
+  Args:
+    sources: Path to sources.toml.
+    db: Path to the SQLite database.
+    source: Limit to one configured source folder.
+    threshold: Similarity score at which two tracks are the same.
+    apply_moves: Perform the moves rather than only reporting them.
+  """
+  sources_config = _load_sources_or_exit(sources)
+  with connection.open_db(db) as conn:
+    tracks = _load_indexed_tracks(conn, source)
+    if not tracks:
+      typer.echo("no fingerprinted tracks; run `music-match scan` first")
+      return
+
+    typer.echo(f"comparing {len(tracks)} fingerprinted tracks")
+    groups = dedup_lib.find_duplicates(tracks, threshold=threshold)
+    if not groups:
+      typer.echo("no duplicates found")
+      return
+
+    total = sum(len(group.duplicates) for group in groups)
+    typer.echo(f"{len(groups)} duplicated recordings, {total} extra copies\n")
+    for group in groups:
+      _report_group(group)
+
+    if not apply_moves:
+      typer.echo("reported only. Re-run with --apply to move the duplicates.")
+      return
+    moved = _apply_group_moves(conn, groups, sources_config)
+    typer.echo(f"moved {moved} duplicates to {sources_config.duplicates_path}")
+
+
+def _report_group(group: dedup_lib.DuplicateGroup) -> None:
+  """Prints one duplicate group.
+
+  Args:
+    group: The group to describe.
+  """
+  typer.echo(f"keep  {group.keeper.path.name}")
+  typer.echo(f"      {group.keeper.quality.describe()}")
+  for duplicate in group.duplicates:
+    typer.echo(f"  dup {duplicate.track.path.name}")
+    typer.echo(f"      {duplicate.track.quality.describe()}"
+               f"  similarity {duplicate.similarity:.3f}")
+  typer.echo("")
+
+
+def _load_indexed_tracks(conn: sqlite3.Connection,
+                         source: str | None) -> list[dedup_lib.IndexedTrack]:
+  """Loads fingerprinted tracks whose files are still present.
+
+  Args:
+    conn: An open database connection.
+    source: Limit to one source folder, or None for all.
+
+  Returns:
+    The tracks dedup can compare.
+  """
+  tracks = []
+  for row in queries.fingerprinted_tracks(conn, source):
+    path = pathlib.Path(row["path"])
+    if not path.is_file():
+      continue
+    try:
+      fingerprint = fp.decode(row["fingerprint"], row["duration_seconds"] or
+                              0.0)
+      audio_quality = quality_lib.probe(path)
+    except (fp.FingerprintError, quality_lib.QualityError) as err:
+      typer.echo(f"  skipped: {err}", err=True)
+      continue
+    tracks.append(
+        dedup_lib.IndexedTrack(track_id=int(row["id"]),
+                               path=path,
+                               fingerprint=fingerprint,
+                               quality=audio_quality))
+  return tracks
+
+
+def _apply_group_moves(conn: sqlite3.Connection,
+                       groups: list[dedup_lib.DuplicateGroup],
+                       sources_config: loader.SourcesConfig) -> int:
+  """Moves every duplicate out of the library.
+
+  Args:
+    conn: An open database connection.
+    groups: The duplicate groups to resolve.
+    sources_config: The loaded source configuration.
+
+  Returns:
+    How many files were moved.
+  """
+  moved = 0
+  for group in groups:
+    for duplicate in group.duplicates:
+      folder = sources_config.folder_for_path(duplicate.track.path)
+      if folder is None:
+        typer.echo(
+            f"  refusing to move {duplicate.track.path}:"
+            " not under a configured source folder",
+            err=True)
+        continue
+      destination = dedup_lib.destination_for(duplicate.track, folder.name,
+                                              sources_config.duplicates_path)
+      destination.parent.mkdir(parents=True, exist_ok=True)
+      shutil.move(str(duplicate.track.path), str(destination))
+      queries.delete_track(conn, duplicate.track.track_id)
+      conn.commit()
+      moved += 1
+  return moved
