@@ -279,9 +279,11 @@ Instead: **content-addressed file storage.**
   PR (description carries the real "what was accomplished" writeup —
   see CLAUDE.md's template), then does a **self-review pass** over the
   full accumulated diff before merging — this is the actual checkpoint,
-  Claude's, not a human one. The review is recorded as a formal
-  `gh pr review --approve`, visible on the PR itself, not just noted in
-  the description. Only after that does auto-merge run
+  Claude's, not a human one. The review is recorded as a comment on the
+  PR itself, not just noted in the description. (Not an approval:
+  GitHub forbids approving your own PR, and Claude commits as the repo
+  owner, so author and reviewer are one account.) Only after that does
+  auto-merge run
   (`gh pr merge --auto --squash --delete-branch`), gated on CI passing.
   No human reviews before code is live — that's intentional. Full detail
   in CLAUDE.md's "PR lifecycle" section.
