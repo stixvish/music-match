@@ -244,8 +244,14 @@ def load_sources(path: pathlib.Path = DEFAULT_SOURCES_FILE) -> SourcesConfig:
         path=pathlib.Path(raw_path).expanduser(),
         check_for_video_rips=check,
     )
-  return SourcesConfig(folders=folders,
-                       duplicates_path=_duplicates_path(document, path))
+  config = SourcesConfig(folders=folders,
+                         duplicates_path=_duplicates_path(document, path))
+  if config.contains(config.duplicates_path):
+    raise ConfigError(
+        f"[duplicates].path ({config.duplicates_path}) is inside a configured"
+        " source folder; dedup would move files there and the next scan would"
+        " index them straight back in")
+  return config
 
 
 def _duplicates_path(document: dict[str, Any],

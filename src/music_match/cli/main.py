@@ -277,8 +277,8 @@ def _fingerprint_all(conn: sqlite3.Connection,
   """
   failures = 0
   for position, item in enumerate(pending, start=1):
+    report = position % 50 == 0 or position == len(pending)
     try:
-      print_at = position % 50 == 0 or position == len(pending)
       fingerprint = fp.fingerprint_file(item.path)
       queries.upsert_track(conn,
                            path=item.path,
@@ -286,7 +286,7 @@ def _fingerprint_all(conn: sqlite3.Connection,
                            fingerprint=fingerprint.encode(),
                            duration_seconds=fingerprint.duration)
       conn.commit()
-      if print_at:
+      if report:
         typer.echo(f"  {position}/{len(pending)}")
     except fp.FingerprintError as err:
       failures += 1
@@ -419,10 +419,15 @@ def _apply_group_moves(conn: sqlite3.Connection,
             " not under a configured source folder",
             err=True)
         continue
-      destination = dedup_lib.destination_for(duplicate.track, folder.name,
-                                              sources_config.duplicates_path)
-      destination.parent.mkdir(parents=True, exist_ok=True)
-      shutil.move(str(duplicate.track.path), str(destination))
+      try:
+        destination = dedup_lib.destination_for(duplicate.track, folder.name,
+                                                sources_config.duplicates_path)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(duplicate.track.path), str(destination))
+      except (OSError, FileExistsError) as err:
+        # One unmovable file must not abandon the rest of the run.
+        typer.echo(f"  could not move {duplicate.track.path}: {err}", err=True)
+        continue
       queries.delete_track(conn, duplicate.track.track_id)
       conn.commit()
       moved += 1
