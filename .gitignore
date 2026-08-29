@@ -16,6 +16,7 @@
 *.sqlite3
 models/
 _review/
+.music-match/
 
 # Python
 __pycache__/
