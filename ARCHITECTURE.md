@@ -145,7 +145,11 @@ Run only once you trust the tags. Reorganizes into `Artist/Album/Track.ext`
 are each cleaned internally.
 
 Kept separate from tagging deliberately: moving files based on wrong
-metadata is far more annoying to undo than fixing a wrong tag.
+metadata is far more annoying to undo than fixing a wrong tag. Two things
+soften that: the pass reports by default and moves only with `--apply`,
+and every applied pass writes a manifest that `restructure undo`
+reverses. A file missing the tags that name a folder is left where it is
+rather than filed under "Unknown".
 
 ---
 

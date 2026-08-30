@@ -81,6 +81,7 @@ uv run music-match undo FILE            # show a file's history, or revert
 uv run music-match video-rips list      # audio that came from a music video
 uv run music-match intake URL...        # download new tracks
 uv run music-match reindex              # rebuild local state from the files
+uv run music-match restructure run      # file into Artist/Album/Track
 ```
 
 ### Finding duplicates
@@ -256,6 +257,30 @@ and for the WAV files that name is the only metadata they have.
 would have picked. It measures whether this is the right recording and
 whether the sources agree. A track can be confidently matched to a
 compilation that legitimately contains it.
+
+### Reorganising the library
+
+**Run this last, and only once you trust the tags.** It files each source
+folder into `Artist/Album/Track.ext` *within itself* — `beatport/` and
+`yt-dlp/` stay separate, and nothing ever leaves a configured folder.
+
+```bash
+uv run music-match restructure run                  # report only
+uv run music-match restructure run --apply          # move them
+uv run music-match restructure undo MANIFEST        # put them back
+```
+
+Moving files on the strength of wrong metadata is far more annoying to
+undo than fixing a wrong tag, which is why this is the last pass. Two
+things reduce the risk: it **reports by default**, and every `--apply`
+writes a manifest under `.music-match/restructure/` that
+`restructure undo` reverses.
+
+A file missing the tags that name a folder — artist, album or title — is
+**left exactly where it is** rather than filed under "Unknown", and the
+missing field is reported. Empty directories left behind by a move are
+cleaned up. Path separators in tags are sanitised, so `AC/DC` becomes one
+folder rather than two.
 
 ### Recovering from a lost database
 
