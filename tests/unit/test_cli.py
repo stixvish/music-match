@@ -1089,3 +1089,35 @@ def test_undo_rejects_an_unknown_batch(tmp_path: pathlib.Path,
       ["undo", str(audio), "--db",
        str(db_path), "--to", "not-a-batch"])
   assert result.exit_code == 1
+
+
+def test_undo_accepts_the_shortened_batch_id(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The id the timeline prints has to be the id `--to` accepts.
+
+  The timeline shortens a 32-character identifier for readability, so
+  requiring the full one back would make the displayed value useless.
+  """
+  audio, db_path = matched_library(tmp_path, monkeypatch)
+  runner.invoke(main.app, ["apply", "--db", str(db_path), "--skip-art"])
+  listing = runner.invoke(
+      main.app,
+      ["undo", str(audio), "--db", str(db_path)]).stdout
+  shown = [
+      line.strip().split()[0]
+      for line in listing.splitlines()
+      if line.startswith("  ") and len(line.strip().split()[0]) == 12
+  ]
+  assert shown, "no batch id was printed"
+  result = runner.invoke(
+      main.app,
+      ["undo", str(audio), "--db",
+       str(db_path), "--to", shown[0]])
+  assert result.exit_code == 0
+  assert tag_io.read_tags(audio).album != "21"
+
+
+def test_undo_rejects_an_ambiguous_prefix() -> None:
+  """A prefix matching two writes is refused rather than guessed at."""
+  with pytest.raises(LookupError, match="matches 2 batches"):
+    main.resolve_batch("ab", ["abcd", "abef"])

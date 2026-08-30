@@ -1365,10 +1365,15 @@ def undo(
       _show_history(conn, track_id, batches)
       return
 
-    target = batches[0][0] if last else str(to)
-    if target not in {batch for batch, _, _ in batches}:
-      typer.echo(f"error: no such batch {target}", err=True)
-      raise typer.Exit(code=1)
+    known = [batch for batch, _, _ in batches]
+    if last:
+      target = known[0]
+    else:
+      try:
+        target = resolve_batch(str(to), known)
+      except LookupError as err:
+        typer.echo(f"error: {err}", err=True)
+        raise typer.Exit(code=1) from err
     try:
       result = apply_lib.revert(conn,
                                 track_id=track_id,
@@ -1387,6 +1392,32 @@ def undo(
   typer.echo(f"{prefix} {len(result.changes)} field(s)")
   for field, (old, new) in sorted(result.changes.items()):
     typer.echo(f"  {field.ljust(14)} {_short(old)} -> {_short(new)}")
+
+
+def resolve_batch(wanted: str, known: list[str]) -> str:
+  """Finds a batch from a prefix of its identifier.
+
+  The timeline prints shortened ids because a full one is 32 hex
+  characters. Requiring the full id back would mean the value shown can
+  never be the value typed.
+
+  Args:
+    wanted: The identifier or a prefix of it.
+    known: Every batch recorded for this track.
+
+  Returns:
+    The full identifier.
+
+  Raises:
+    LookupError: If the prefix matches no batch, or more than one.
+  """
+  matches = [batch for batch in known if batch.startswith(wanted)]
+  if not matches:
+    raise LookupError(f"no such batch {wanted}")
+  if len(matches) > 1:
+    raise LookupError(f"{wanted} matches {len(matches)} batches; use more"
+                      " characters")
+  return matches[0]
 
 
 def _show_history(conn: sqlite3.Connection, track_id: int,
