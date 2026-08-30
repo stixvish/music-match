@@ -159,3 +159,47 @@ def test_wont_match_is_one_row_per_track(conn: sqlite3.Connection) -> None:
                (track_id, "self-made edit"))
   with pytest.raises(sqlite3.IntegrityError):
     conn.execute("INSERT INTO wont_match (track_id) VALUES (?)", (track_id,))
+
+
+def test_migration_adds_genre_confidence_to_an_older_database(
+    tmp_path: pathlib.Path) -> None:
+  """A version 1 database gains the column without losing its rows.
+
+  The database is gitignored and rebuildable, but a confusing crash on
+  reopening one is worth a migration to avoid.
+  """
+  db_path = tmp_path / "old.db"
+  old = connection.connect(db_path)
+  old.execute("CREATE TABLE tracks (id INTEGER PRIMARY KEY,"
+              " path TEXT NOT NULL UNIQUE, source_name TEXT NOT NULL,"
+              " fingerprint TEXT, duration_seconds REAL, detected_genre TEXT,"
+              " source_video_id TEXT, tags_json TEXT,"
+              " match_status TEXT NOT NULL DEFAULT 'pending',"
+              " first_seen_at TEXT, updated_at TEXT)")
+  old.execute("INSERT INTO tracks (path, source_name) VALUES (?, ?)",
+              ("/music/yt-dlp/a.m4a", "yt-dlp"))
+  old.execute("PRAGMA user_version = 1")
+  old.commit()
+  old.close()
+
+  conn = connection.connect(db_path)
+  connection.initialize(conn)
+  columns = {row[1] for row in conn.execute("PRAGMA table_info(tracks)")}
+  assert "genre_confidence" in columns
+  assert connection.schema_version(conn) == schema.SCHEMA_VERSION
+  assert conn.execute("SELECT count(*) AS n FROM tracks").fetchone()["n"] == 1
+
+
+def test_migrating_twice_is_harmless(tmp_path: pathlib.Path) -> None:
+  """Re-initializing an already-migrated database does not fail."""
+  db_path = tmp_path / "state.db"
+  with connection.open_db(db_path) as conn:
+    connection.initialize(conn)
+    assert connection.schema_version(conn) == schema.SCHEMA_VERSION
+
+
+def test_fresh_database_skips_migrations(tmp_path: pathlib.Path) -> None:
+  """A new database is created with every column, nothing to migrate."""
+  with connection.open_db(tmp_path / "new.db") as conn:
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(tracks)")}
+  assert "genre_confidence" in columns

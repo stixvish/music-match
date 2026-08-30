@@ -154,18 +154,28 @@ def normalize_genre(genre: str) -> str:
   The Essentia discogs-effnet model emits labels like
   "Electronic---Deep House"; precedence is keyed on the top-level genre.
 
+  The rules are tuned to the discogs-effnet vocabulary, whose fifteen
+  top-level genres include "Funk / Soul", "Folk, World, & Country",
+  "Children's" and "Stage & Screen" — punctuation that a naive strip
+  turns into doubled or trailing underscores.
+
+  Apostrophes vanish, so "Children's" is "childrens". An "&" between two
+  word characters is spelled "n", which is what makes "R&B" the "rnb"
+  that precedence.toml is keyed on; a spaced "&" is just a separator, so
+  "Stage & Screen" is "stage_screen". Every other run of punctuation or
+  whitespace collapses to a single underscore.
+
   Args:
     genre: A raw genre label from a detector or a tag.
 
   Returns:
-    A lowercase key with the sub-genre dropped, "&" spelled as "n", spaces
-    and hyphens turned into underscores, and other punctuation removed —
-    "Electronic---Deep House" becomes "electronic", "R&B" becomes "rnb",
-    and "Drum & Bass" becomes "drum_n_bass".
+    A lowercase key with the style dropped — "Electronic---Deep House"
+    becomes "electronic", "Funk / Soul" becomes "funk_soul", and
+    "Folk, World, & Country" becomes "folk_world_country".
   """
-  top_level = genre.split("---")[0].strip().lower().replace("&", "n")
-  underscored = re.sub(r"[\s\-]+", "_", top_level)
-  return re.sub(r"[^a-z0-9_]", "", underscored)
+  top_level = genre.split("---")[0].strip().lower().replace("'", "")
+  spelled = re.sub(r"(?<=\w)&(?=\w)", "n", top_level)
+  return re.sub(r"[^a-z0-9]+", "_", spelled).strip("_")
 
 
 def _read_toml(path: pathlib.Path) -> dict[str, Any]:
