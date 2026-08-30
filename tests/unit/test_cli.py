@@ -1272,3 +1272,25 @@ def test_restore_refuses_an_unknown_source(
       str(db_path)
   ])
   assert result.exit_code == 1
+
+
+def test_restore_refuses_a_file_outside_quarantine(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Restoring is a move *into* the library, so its input is checked.
+
+  Without this, any path whose parent happened to be named after a
+  source folder could be moved into the library.
+  """
+  config, db_path = rip_library(tmp_path, monkeypatch)
+  stray = tmp_path / "elsewhere" / "yt-dlp" / "track.m4a"
+  stray.parent.mkdir(parents=True)
+  conftest.write_m4a(stray)
+  result = runner.invoke(main.app, [
+      "video-rips", "restore",
+      str(stray), "--sources",
+      str(config), "--db",
+      str(db_path)
+  ])
+  assert result.exit_code == 1
+  assert stray.exists()
+  assert not (tmp_path / "yt-dlp" / "track.m4a").exists()

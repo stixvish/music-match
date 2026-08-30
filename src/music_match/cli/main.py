@@ -1575,6 +1575,13 @@ def rips_restore(
     db: Path to the SQLite database.
   """
   sources_config = _load_sources_or_exit(sources)
+  quarantine_root = sources_config.review_path / QUARANTINE_SUBFOLDER
+  # Restoring is a move *into* the library, so it only accepts files that
+  # are actually in quarantine. Without this, any path whose parent
+  # happened to be named after a source folder could be moved in.
+  if not _is_within(file, quarantine_root):
+    typer.echo(f"error: {file} is not in {quarantine_root}", err=True)
+    raise typer.Exit(code=1)
   folder = sources_config.folders.get(file.parent.name)
   if folder is None:
     typer.echo(
@@ -1601,6 +1608,23 @@ def rips_restore(
       queries.set_match_status(conn, track_id, "pending")
       conn.commit()
   typer.echo(f"restored {file.name} to {folder.path}")
+
+
+def _is_within(path: pathlib.Path, root: pathlib.Path) -> bool:
+  """Returns whether a path lies inside a directory.
+
+  Args:
+    path: The path to test.
+    root: The directory it should be under.
+
+  Returns:
+    True if `path` is inside `root`.
+  """
+  try:
+    path.resolve().relative_to(root.resolve())
+  except ValueError:
+    return False
+  return True
 
 
 def _find_rips(
