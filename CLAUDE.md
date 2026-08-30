@@ -229,14 +229,14 @@ order:
   MCP server was moved to an archived, unmaintained repo with no
   security guarantees, and the third-party alternatives found on a
   search were inconsistent and hard to vet. Skip it.
-- **Playwright** — legitimate, actively maintained by Microsoft
-  (`@playwright/mcp`), but nothing to test until the web UI (build order
-  step 9) exists. Revisit there, not before — wiring it up against an
-  empty project just means it sits unused. When you do get there, note
-  that even Microsoft's own docs point out MCP loads large tool schemas
-  and accessibility trees into context on every turn; a CLI+skill
-  approach can be more token-efficient for a coding agent specifically —
-  worth weighing both at that point rather than defaulting to MCP.
+- **Playwright** — now configured in `.mcp.json` (untracked), since the
+  web UI exists. Two things cost time when it was first wired up, both
+  worth checking before suspecting the server: `--scope` is a
+  `claude mcp add` flag and must not end up in the server's `args`, and
+  Node here comes from nvm, so `npx` is absent from the PATH a
+  non-interactive shell gets. Note also that MCP loads large tool schemas
+  and accessibility trees into context on every turn; driving Playwright
+  from a script stays the cheaper option for scripted checks.
 
 ## Things to avoid
 

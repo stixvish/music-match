@@ -82,6 +82,7 @@ uv run music-match video-rips list      # audio that came from a music video
 uv run music-match intake URL...        # download new tracks
 uv run music-match reindex              # rebuild local state from the files
 uv run music-match restructure run      # file into Artist/Album/Track
+uv run music-match web                  # review queue in a browser
 ```
 
 ### Finding duplicates
@@ -257,6 +258,30 @@ and for the WAV files that name is the only metadata they have.
 would have picked. It measures whether this is the right recording and
 whether the sources agree. A track can be confidently matched to a
 compilation that legitimately contains it.
+
+### Reviewing in a browser
+
+```bash
+uv run music-match web                     # opens http://127.0.0.1:8080
+uv run music-match web --port 9000 --no-open
+```
+
+The review queue holds the three things the pipeline cannot decide on its
+own, and each gets its own answer rather than a single "approve":
+
+- **review** — matched, but not confidently enough to write unseen.
+  Shows a field-by-field diff of what would change, an editable form, and
+  the cover art the match found. Accepting writes through the same path
+  the CLI uses, so `undo` works on a web edit exactly as on a
+  command-line one.
+- **no_match** — nothing usable came back. Mark it *won't match* and it
+  stops reappearing.
+- **quarantined** — held as a possible video rip. Release it if the audio
+  is fine.
+
+The **Add links** page expands submitted links and reports how many are
+new. The download itself stays on the command line, because the duplicate
+pre-check asks a question and that needs a terminal.
 
 ### Reorganising the library
 
