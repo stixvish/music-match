@@ -76,6 +76,8 @@ uv run music-match probe FILE...        # compare all four metadata sources
 uv run music-match match show FILE      # what one file would be matched to
 uv run music-match match run            # match the library, record proposals
 uv run music-match match summary        # how many matched / need review
+uv run music-match apply                # write the matches into the files
+uv run music-match undo FILE            # show a file's history, or revert
 ```
 
 ### Finding duplicates
@@ -252,6 +254,45 @@ would have picked. It measures whether this is the right recording and
 whether the sources agree. A track can be confidently matched to a
 compilation that legitimately contains it.
 
+### Writing tags
+
+`apply` is the first command that modifies your audio files. It writes the
+proposals `match` recorded, embeds 640x640 cover art, and — **before
+touching any file** — records every previous value in `tag_history`.
+
+```bash
+uv run music-match apply --dry-run   # what would change
+uv run music-match apply             # write it
+uv run music-match apply --include-review   # also the doubtful ones
+```
+
+Only matches the matcher trusted are written; anything queued for review
+is skipped unless you ask for it. Fields the match says nothing about are
+left alone rather than cleared.
+
+**Cover art is content-addressed.** Images are normalised to 640x640 JPEG
+and stored under `.music-match/art-store/<sha256>.jpg`, with `tag_history`
+recording only the hash. Every track on an album therefore shares one
+stored file instead of a dozen copies, and the database never carries
+image bytes. The cover a write *replaces* is stored too — otherwise its
+hash in the history would point at nothing and undo could not put it back.
+
+### Undoing
+
+```bash
+uv run music-match undo FILE                # show the timeline
+uv run music-match undo FILE --last         # revert the most recent write
+uv run music-match undo FILE --to <batch>   # revert to before that write
+uv run music-match undo FILE --last --dry-run
+```
+
+Each write shares one **batch** identifier, so "revert to a prior point"
+has a well-defined point. Undoing several writes returns the value from
+before the *first* of them, not the last. Text fields and cover art travel
+in the same batch, so one undo restores both together — never the title
+from last week with this week's cover. The undo is itself recorded, so it
+can be undone in turn.
+
 Useful flags:
 
 - `config show --sources PATH --precedence PATH` — point at config files
@@ -284,6 +325,10 @@ Useful flags:
   thresholds.
 - `match show --genre "Electronic"` — pick the precedence order by genre
   without needing the track indexed.
+- `apply --source NAME`, `--limit N`, `--dry-run` — as for `scan`.
+- `apply --skip-art` — write text fields only, downloading nothing.
+- `apply --art-store DIR` / `undo --art-store DIR` — keep art somewhere
+  other than `.music-match/art-store`.
 
 ## Development
 
