@@ -7,7 +7,7 @@ leave the database consistent.
 
 import pathlib
 import sqlite3
-from typing import Any, Iterator, Mapping
+from typing import Any, Iterator, Mapping, Sequence
 
 
 def upsert_track(
@@ -248,6 +248,72 @@ def archive_size(connection: sqlite3.Connection) -> int:
   row = connection.execute(
       "SELECT count(*) AS n FROM download_archive").fetchone()
   return int(row["n"])
+
+
+def review_queue(connection: sqlite3.Connection,
+                 statuses: Sequence[str] | None = None) -> list[sqlite3.Row]:
+  """Returns the tracks waiting on a human decision.
+
+  Three things land here, and they need different answers: a match the
+  matcher was unsure of, a track nothing matched at all, and a file held
+  back as a possible video rip.
+
+  Args:
+    connection: An open connection.
+    statuses: Which statuses to include. Defaults to everything that
+      needs a decision.
+
+  Returns:
+    Rows carrying the track, its proposal and its confidence, worst
+    confidence first so the ones most likely to be wrong are seen first.
+  """
+  wanted = tuple(statuses or ("review", "no_match", "quarantined"))
+  placeholders = ", ".join("?" * len(wanted))
+  return list(
+      connection.execute(
+          "SELECT id, path, source_name, match_status, match_confidence,"
+          "       matched_source, matched_tags_json, matched_art_url,"
+          "       detected_genre, genre_confidence, duration_seconds"
+          f" FROM tracks WHERE match_status IN ({placeholders})"
+          " ORDER BY coalesce(match_confidence, 0), path", wanted).fetchall())
+
+
+def review_counts(connection: sqlite3.Connection) -> dict[str, int]:
+  """Counts how many tracks are in each state needing a decision.
+
+  Args:
+    connection: An open connection.
+
+  Returns:
+    Status to count, including zeros so the display is stable.
+  """
+  counts = {"review": 0, "no_match": 0, "quarantined": 0}
+  rows = connection.execute(
+      "SELECT match_status AS status, count(*) AS n FROM tracks"
+      " WHERE match_status IN ('review', 'no_match', 'quarantined')"
+      " GROUP BY match_status").fetchall()
+  for row in rows:
+    counts[str(row["status"])] = int(row["n"])
+  return counts
+
+
+def track_by_id(connection: sqlite3.Connection,
+                track_id: int) -> sqlite3.Row | None:
+  """Loads one track by its row id.
+
+  Args:
+    connection: An open connection.
+    track_id: The track's row id.
+
+  Returns:
+    The row, or None if there is no such track.
+  """
+  row: sqlite3.Row | None = connection.execute(
+      "SELECT id, path, source_name, match_status, match_confidence,"
+      "       matched_source, matched_tags_json, matched_art_url,"
+      "       detected_genre, genre_confidence, duration_seconds, tags_json"
+      " FROM tracks WHERE id = ?", (track_id,)).fetchone()
+  return row
 
 
 def tracks_with_matches(
