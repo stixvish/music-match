@@ -79,6 +79,7 @@ uv run music-match match summary        # how many matched / need review
 uv run music-match apply                # write the matches into the files
 uv run music-match undo FILE            # show a file's history, or revert
 uv run music-match video-rips list      # audio that came from a music video
+uv run music-match intake URL...        # download new tracks
 ```
 
 ### Finding duplicates
@@ -254,6 +255,42 @@ and for the WAV files that name is the only metadata they have.
 would have picked. It measures whether this is the right recording and
 whether the sources agree. A track can be confidently matched to a
 compilation that legitimately contains it.
+
+### Downloading new tracks
+
+`intake` takes links — single tracks, albums, whole playlists — expands
+them, and downloads what you do not already have.
+
+```bash
+uv run music-match intake "https://..." "https://..."
+uv run music-match intake --from-file links.txt   # one per line, # comments ok
+uv run music-match intake URL --dry-run           # expand and check, fetch nothing
+uv run music-match intake URL --into beatport     # a different source folder
+```
+
+Expansion is **metadata-only**, so a pasted batch costs one request per
+link rather than a download per track, and both dedup layers get to run
+before anything is fetched:
+
+- **Layer 1 — the archive check.** Every completed download records its
+  source id, so a link submitted twice is recognised instantly with no
+  network call. Same idea as yt-dlp's `--download-archive`, kept in
+  SQLite so `reindex` can rebuild it from the files themselves.
+- **Layer 2 — the metadata pre-check.** Anything that merely *looks* like
+  a track you already have raises a **question**, never a silent skip. A
+  shared title is often a legitimately different mix, and skipping one you
+  wanted is worse than fetching a duplicate — layer 3, the audio
+  fingerprint, catches a true duplicate after download anyway. Use
+  `--assume-new` for unattended runs.
+
+Downloads take an audio-only **m4a** stream where one exists, so there is
+no transcode, no quality loss, and no dependency on ffmpeg. Files are
+named `Uploader - Title.m4a`, and the source id is written into a
+non-Rekordbox tag field so `reindex` can rebuild the archive from the
+files alone.
+
+A failed download is **not** archived — archiving a failure would skip it
+forever on every future run.
 
 ### Video rips
 
