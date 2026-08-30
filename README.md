@@ -80,6 +80,7 @@ uv run music-match apply                # write the matches into the files
 uv run music-match undo FILE            # show a file's history, or revert
 uv run music-match video-rips list      # audio that came from a music video
 uv run music-match intake URL...        # download new tracks
+uv run music-match reindex              # rebuild local state from the files
 ```
 
 ### Finding duplicates
@@ -255,6 +256,29 @@ and for the WAV files that name is the only metadata they have.
 would have picked. It measures whether this is the right recording and
 whether the sources agree. A track can be confidently matched to a
 compilation that legitimately contains it.
+
+### Recovering from a lost database
+
+The SQLite database is gitignored and disposable by design. `reindex`
+rebuilds it from the files themselves — nothing is downloaded and nothing
+is re-tagged.
+
+```bash
+uv run music-match reindex                     # the recovery path
+uv run music-match reindex --dry-run
+uv run music-match reindex --skip-fingerprints # index and archive only
+```
+
+Three things come back. Every file is **indexed** with its duration and a
+snapshot of its current tags, so a library that merely lost its database
+is distinguishable from one that was never tagged. Every file is
+**fingerprinted**, restoring the dedup index. And the **download archive**
+is rebuilt from the source ids embedded at download time — which is what
+that stamping is for. Without it a lost database means every link you have
+ever downloaded looks new again.
+
+This is also the first real command on a new machine, after `uv sync` and
+confirming the library is present.
 
 ### Downloading new tracks
 

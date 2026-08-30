@@ -26,6 +26,28 @@ pytestmark = pytest.mark.integration
 # that has the credentials sitting in .env.
 env.load_env()
 
+# Statuses meaning "not now" rather than "not the same shape". These
+# tests exist to catch a source changing its response format; a service
+# being unreachable or throttling a shared CI address says nothing about
+# that, and failing on it trains everyone to ignore a red build.
+UNAVAILABLE = ("HTTP 429", "HTTP 500", "HTTP 502", "HTTP 503", "HTTP 504",
+               "timed out", "Connection")
+
+
+def skip_if_unavailable(error: Exception) -> None:
+  """Skips the test when a source is down rather than changed.
+
+  Args:
+    error: The failure raised by the source.
+
+  Raises:
+    Skipped: If the failure looks like unavailability or throttling.
+  """
+  message = str(error)
+  if any(marker in message for marker in UNAVAILABLE):
+    pytest.skip(f"source unavailable, not a shape change: {message}")
+
+
 # A release old enough and famous enough that every one of these services
 # is certain to hold it, so a failure means a shape change rather than a
 # gap in someone's catalogue.
@@ -34,7 +56,11 @@ QUERY = base.SourceQuery(title="Around the World", artist="Daft Punk")
 
 def test_itunes_returns_a_usable_result() -> None:
   """iTunes still answers, and still carries album and track numbers."""
-  results = itunes.ITunesSource().search(QUERY, limit=1)
+  try:
+    results = itunes.ITunesSource().search(QUERY, limit=1)
+  except base.SourceError as err:
+    skip_if_unavailable(err)
+    raise
   assert results, "iTunes returned no result for a very well-known track"
   tags = results[0].tags
   assert tags.title
@@ -44,7 +70,11 @@ def test_itunes_returns_a_usable_result() -> None:
 
 def test_itunes_artwork_url_is_still_resizable() -> None:
   """The 100x100 path segment is what we rewrite to 640x640."""
-  results = itunes.ITunesSource().search(QUERY, limit=1)
+  try:
+    results = itunes.ITunesSource().search(QUERY, limit=1)
+  except base.SourceError as err:
+    skip_if_unavailable(err)
+    raise
   assert results[0].art_url is not None
   assert "640x640" in results[0].art_url
 
@@ -62,7 +92,11 @@ def test_musicbrainz_returns_artist_credits() -> None:
     reason="Spotify credentials not configured")
 def test_spotify_still_carries_an_isrc() -> None:
   """Spotify leads the ISRC ordering; this is that claim, checked."""
-  results = spotify.SpotifySource().search(QUERY, limit=1)
+  try:
+    results = spotify.SpotifySource().search(QUERY, limit=1)
+  except base.SourceError as err:
+    skip_if_unavailable(err)
+    raise
   assert results, "Spotify returned no result"
   assert results[0].tags.isrc, "Spotify stopped returning ISRCs in search"
 
@@ -72,7 +106,11 @@ def test_spotify_still_carries_an_isrc() -> None:
     reason="Spotify credentials not configured")
 def test_spotify_still_offers_large_art() -> None:
   """640px is the size this tool embeds."""
-  results = spotify.SpotifySource().search(QUERY, limit=1)
+  try:
+    results = spotify.SpotifySource().search(QUERY, limit=1)
+  except base.SourceError as err:
+    skip_if_unavailable(err)
+    raise
   assert results[0].art_size == 640
 
 
@@ -87,7 +125,11 @@ def test_discogs_still_carries_credits() -> None:
   """
   query = base.SourceQuery(title="Strobe (DJ Marky & S.P.Y Remix)",
                            artist="deadmau5")
-  results = discogs.DiscogsSource().search(query, limit=1)
+  try:
+    results = discogs.DiscogsSource().search(query, limit=1)
+  except base.SourceError as err:
+    skip_if_unavailable(err)
+    raise
   assert results, "Discogs returned no result"
   assert results[0].tags.remixer, "Discogs stopped exposing remix credits"
 
@@ -96,7 +138,11 @@ def test_discogs_still_carries_credits() -> None:
                     reason="Discogs token not configured")
 def test_discogs_still_carries_label_and_catalogue_number() -> None:
   """Label and catalogue number are a large part of why Discogs leads."""
-  results = discogs.DiscogsSource(fetch_release_detail=False).search(QUERY,
-                                                                     limit=1)
+  try:
+    results = discogs.DiscogsSource(fetch_release_detail=False).search(QUERY,
+                                                                       limit=1)
+  except base.SourceError as err:
+    skip_if_unavailable(err)
+    raise
   assert results
   assert "label" in results[0].extra
