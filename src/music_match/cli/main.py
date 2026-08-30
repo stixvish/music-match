@@ -613,12 +613,11 @@ def _detect_all(conn: sqlite3.Connection, detector: genre_lib.GenreDetector,
       failures += 1
       typer.echo(f"  skipped: {err}", err=True)
       continue
-    if result.label is None:
+    top = result.top
+    if top is None:
       failures += 1
       typer.echo(f"  skipped: no prediction for {item.path}", err=True)
       continue
-    top = result.top
-    assert top is not None
     queries.upsert_track(conn,
                          path=item.path,
                          source_name=item.source.name,

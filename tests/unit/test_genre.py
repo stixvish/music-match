@@ -241,3 +241,33 @@ def test_model_urls_cover_every_required_file() -> None:
   }
   assert required == set(genre.MODEL_URLS)
   assert all(url.startswith("https://") for url in genre.MODEL_URLS.values())
+
+
+CLASSES = ("Blues---A", "Electronic---B", "Pop---C")
+
+
+def test_result_from_frames_ranks_the_average() -> None:
+  """The whole path from raw model output to an answer, without Essentia."""
+  frames = [[0.1, 0.7, 0.2], [0.1, 0.9, 0.4]]
+  result = genre.result_from_frames(frames, CLASSES, top_n=2)
+  assert result.label == "Electronic---B"
+  assert result.top is not None
+  assert result.top.confidence == pytest.approx(0.8)
+  assert len(result.predictions) == 2
+
+
+def test_result_from_no_frames_is_empty() -> None:
+  """A file too short to yield a frame produces no prediction, not a crash.
+
+  Real libraries hold intros, skits and jingles shorter than one analysis
+  window; the model embeds them to nothing.
+  """
+  result = genre.result_from_frames([], CLASSES)
+  assert not result.predictions
+  assert result.label is None
+
+
+def test_result_from_frames_rejects_a_width_mismatch() -> None:
+  """Frames that do not match the label list are an error, not a guess."""
+  with pytest.raises(genre.GenreError):
+    genre.result_from_frames([[0.1, 0.2]], CLASSES)

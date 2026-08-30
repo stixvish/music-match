@@ -630,3 +630,24 @@ def test_genre_summary_can_filter_by_confidence(
        str(db_path), "--min-confidence", "0.95"])
   assert "Electronic---Techno" in kept.stdout
   assert "no genres detected yet" in dropped.stdout
+
+
+def test_genre_index_survives_a_file_with_no_prediction(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A track too short to analyse is skipped, not fatal.
+
+  Files shorter than one analysis window embed to nothing. Letting that
+  end the run would abandon a whole library pass at the first jingle.
+  """
+  config = build_source_tree(tmp_path, ("good.m4a", "tiny.m4a"))
+  fake_detector(monkeypatch, {
+      "good.m4a": "Electronic---Techno",
+      "tiny.m4a": ""
+  })
+  result = runner.invoke(main.app, [
+      "genre", "index", "--sources",
+      str(config), "--db",
+      str(tmp_path / "state.db")
+  ])
+  assert result.exit_code == 0
+  assert "analysed 1, failed 1" in result.stdout

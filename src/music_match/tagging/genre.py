@@ -176,6 +176,31 @@ def rank_predictions(scores: Sequence[float],
   return tuple(ranked[:limit])
 
 
+def result_from_frames(frames: Iterable[Sequence[float]],
+                       classes: Sequence[str],
+                       top_n: int = DEFAULT_TOP_N) -> GenreResult:
+  """Turns raw per-frame model output into a ranked result.
+
+  Split out from the detector so the whole path from model output to
+  answer is testable without Essentia installed.
+
+  Args:
+    frames: One sequence of per-label scores per analysed frame.
+    classes: The label names, in the model's output order.
+    top_n: How many predictions to keep.
+
+  Returns:
+    The ranked predictions, empty if there were no frames to average.
+
+  Raises:
+    GenreError: If the frames do not line up with the label list.
+  """
+  scores = mean_over_frames(frames)
+  if not scores:
+    return GenreResult(predictions=())
+  return GenreResult(predictions=rank_predictions(scores, classes, top_n))
+
+
 def load_classes(metadata_path: pathlib.Path) -> tuple[str, ...]:
   """Reads the label list from the classifier's metadata file.
 
@@ -305,12 +330,7 @@ class GenreDetector:
     Raises:
       GenreError: If the file cannot be decoded or the model fails on it.
     """
-    frames = self._predict(path)
-    scores = mean_over_frames(frames)
-    if not scores:
-      return GenreResult(predictions=())
-    return GenreResult(
-        predictions=rank_predictions(scores, self._classes, self._top_n))
+    return result_from_frames(self._predict(path), self._classes, self._top_n)
 
   def _predict(self, path: pathlib.Path) -> list[list[float]]:
     """Runs the model chain over a file.
@@ -330,7 +350,15 @@ class GenreDetector:
                                   sampleRate=MODEL_SAMPLE_RATE,
                                   resampleQuality=4)()
       embeddings = self._embedder(audio)
+      # A file shorter than one analysis window embeds to nothing, and
+      # handing that to the classifier raises out of the binding layer
+      # rather than returning empty. Short files are ordinary in a real
+      # library — intros, skits, jingles — and must not end the run.
+      if len(embeddings) == 0:
+        return []
       predictions = self._classifier(embeddings)
-    except RuntimeError as err:
+    except (RuntimeError, TypeError, ValueError) as err:
+      # Essentia surfaces decode and shape problems through its binding
+      # layer as several exception types, not just RuntimeError.
       raise GenreError(f"could not analyse {path}: {err}") from err
     return [list(frame) for frame in predictions]
