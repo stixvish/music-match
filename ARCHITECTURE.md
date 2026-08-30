@@ -114,6 +114,13 @@ for anything layers 1 and 2 missed.
    special-casing. Their existing tags are treated as a strong search
    hint, the same as any other partially-tagged file.
 
+   Candidates are scored rather than taken on each platform's own
+   ranking, which is right roughly half the time: duration first, then
+   title and artist similarity, then penalties for release shapes that
+   are usually wrong. Where sources disagree on a release, a plurality
+   overrides configured precedence — the only signal that separates a
+   correct album from a soundtrack matching on every other field.
+
 5. **Confidence scoring.**
    - High confidence → auto-apply.
    - Low confidence or ambiguous → **review queue** (web UI).
