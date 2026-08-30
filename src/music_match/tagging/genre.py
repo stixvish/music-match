@@ -18,10 +18,12 @@ above that boundary is pure Python and testable without it, which is
 what keeps the unit suite hermetic and CI free of a 94MB wheel.
 """
 
+import contextlib
 import dataclasses
 import json
+import os
 import pathlib
-from typing import Any, Iterable, Sequence
+from typing import Any, Iterator, Iterable, Sequence
 
 DEFAULT_MODELS_DIR = pathlib.Path("models")
 
@@ -37,6 +39,13 @@ CLASSIFIER_INPUT_NODE = "serving_default_model_Placeholder"
 CLASSIFIER_OUTPUT_NODE = "PartitionedCall:0"
 
 DEFAULT_TOP_N = 5
+
+# Set to anything non-empty to let Essentia's own logging through. Off by
+# default because the TensorFlow predict algorithms emit
+# "No network created, or last created network has been deleted..." many
+# times *per file* — thousands of lines over a library-sized run, none of
+# it actionable. Real failures reach us as exceptions, not log lines.
+ESSENTIA_LOGS_VAR = "MUSIC_MATCH_ESSENTIA_LOGS"
 
 # Below this the model is guessing. Measured against tracks with known
 # genres: the top-level genre is right about 22% of the time under 0.15
@@ -240,6 +249,64 @@ def missing_models(
   return tuple(name for name in MODEL_URLS if not (models_dir / name).is_file())
 
 
+def essentia_logs_enabled() -> bool:
+  """Returns whether Essentia's own log output should be left alone.
+
+  Returns:
+    True if the escape-hatch environment variable is set.
+  """
+  return bool(os.environ.get(ESSENTIA_LOGS_VAR, "").strip())
+
+
+def _import_essentia_standard() -> Any:
+  """Imports `essentia.standard`, quieting TensorFlow first.
+
+  TensorFlow's C++ logging is configured from the environment when it is
+  first loaded, so this has to happen before the import rather than after.
+
+  Returns:
+    The `essentia.standard` module.
+
+  Raises:
+    ImportError: If Essentia is not installed.
+  """
+  if not essentia_logs_enabled():
+    os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
+  from essentia import standard  # pylint: disable=import-outside-toplevel
+  return standard
+
+
+@contextlib.contextmanager
+def quiet_essentia(*,
+                   warnings: bool = True,
+                   info: bool = True) -> Iterator[None]:
+  """Silences Essentia's log streams for the duration of a block.
+
+  Scoped rather than global, and restores whatever was set before, so a
+  caller that wants the logs can have them.
+
+  Args:
+    warnings: Whether to silence the warning stream.
+    info: Whether to silence the info stream.
+
+  Yields:
+    None.
+  """
+  if essentia_logs_enabled():
+    yield
+    return
+  import essentia  # pylint: disable=import-outside-toplevel
+  previous = (essentia.log.warningActive, essentia.log.infoActive)
+  if warnings:
+    essentia.log.warningActive = False
+  if info:
+    essentia.log.infoActive = False
+  try:
+    yield
+  finally:
+    essentia.log.warningActive, essentia.log.infoActive = previous
+
+
 def have_essentia() -> bool:
   """Returns whether Essentia can be imported.
 
@@ -252,10 +319,10 @@ def have_essentia() -> bool:
     algorithms this module needs.
   """
   try:
-    import essentia.standard  # pylint: disable=import-outside-toplevel
+    standard = _import_essentia_standard()
   except ImportError:
     return False
-  return hasattr(essentia.standard, "TensorflowPredictEffnetDiscogs")
+  return hasattr(standard, "TensorflowPredictEffnetDiscogs")
 
 
 class GenreDetector:
@@ -302,14 +369,15 @@ class GenreDetector:
     """
     # Imported here rather than at module scope: Essentia is an optional
     # install and everything above this class works without it.
-    from essentia import standard  # pylint: disable=import-outside-toplevel
-    embedder = standard.TensorflowPredictEffnetDiscogs(
-        graphFilename=str(self._models_dir / EMBEDDING_MODEL_FILE),
-        output=EMBEDDING_OUTPUT_NODE)
-    classifier = standard.TensorflowPredict2D(graphFilename=str(
-        self._models_dir / CLASSIFIER_MODEL_FILE),
-                                              input=CLASSIFIER_INPUT_NODE,
-                                              output=CLASSIFIER_OUTPUT_NODE)
+    standard = _import_essentia_standard()
+    with quiet_essentia():
+      embedder = standard.TensorflowPredictEffnetDiscogs(
+          graphFilename=str(self._models_dir / EMBEDDING_MODEL_FILE),
+          output=EMBEDDING_OUTPUT_NODE)
+      classifier = standard.TensorflowPredict2D(graphFilename=str(
+          self._models_dir / CLASSIFIER_MODEL_FILE),
+                                                input=CLASSIFIER_INPUT_NODE,
+                                                output=CLASSIFIER_OUTPUT_NODE)
     return embedder, classifier
 
   @property
@@ -344,19 +412,22 @@ class GenreDetector:
     Raises:
       GenreError: If the file cannot be decoded or the model fails.
     """
-    from essentia import standard  # pylint: disable=import-outside-toplevel
+    standard = _import_essentia_standard()
     try:
+      # The loader's warnings are left on: a decode problem is worth
+      # hearing about. Only the predict algorithms are silenced.
       audio = standard.MonoLoader(filename=str(path),
                                   sampleRate=MODEL_SAMPLE_RATE,
                                   resampleQuality=4)()
-      embeddings = self._embedder(audio)
-      # A file shorter than one analysis window embeds to nothing, and
-      # handing that to the classifier raises out of the binding layer
-      # rather than returning empty. Short files are ordinary in a real
-      # library — intros, skits, jingles — and must not end the run.
-      if len(embeddings) == 0:
-        return []
-      predictions = self._classifier(embeddings)
+      with quiet_essentia():
+        embeddings = self._embedder(audio)
+        # A file shorter than one analysis window embeds to nothing, and
+        # handing that to the classifier raises out of the binding layer
+        # rather than returning empty. Short files are ordinary in a real
+        # library — intros, skits, jingles — and must not end the run.
+        if len(embeddings) == 0:
+          return []
+        predictions = self._classifier(embeddings)
     except (RuntimeError, TypeError, ValueError) as err:
       # Essentia surfaces decode and shape problems through its binding
       # layer as several exception types, not just RuntimeError.
