@@ -103,6 +103,84 @@ def load_audio(path: pathlib.Path) -> mutagen.FileType:
   return audio
 
 
+def read_art(path: pathlib.Path) -> bytes | None:
+  """Reads the cover image embedded in a file.
+
+  Args:
+    path: Path to the audio file.
+
+  Returns:
+    The image bytes, or None if the file has no cover.
+
+  Raises:
+    TagError: If the file cannot be read or its tag format is
+      unsupported.
+  """
+  container = get_tags(load_audio(path))
+  if isinstance(container, id3.ID3):
+    frames = container.getall("APIC")
+    return bytes(frames[0].data) if frames else None
+  if isinstance(container, mp4.MP4Tags):
+    covers = container.get("covr")
+    return bytes(covers[0]) if covers else None
+  raise TagError(
+      f"unsupported tag container {type(container).__name__}: {path}")
+
+
+def write_art(path: pathlib.Path,
+              image: bytes | None,
+              *,
+              dry_run: bool = False) -> bool:
+  """Embeds a cover image, or removes the one already there.
+
+  Args:
+    path: Path to the audio file.
+    image: JPEG bytes to embed, or None to remove any existing cover.
+    dry_run: If True, report whether this would change anything without
+      touching the file.
+
+  Returns:
+    True if the file's art changed, or would have under dry_run.
+
+  Raises:
+    TagError: If the file cannot be read or written, or its tag format is
+      unsupported.
+  """
+  audio = load_audio(path)
+  container = get_tags(audio)
+  current = read_art(path)
+  if current == image:
+    return False
+  if dry_run:
+    return True
+
+  if isinstance(container, id3.ID3):
+    container.delall("APIC")
+    if image is not None:
+      container.add(
+          id3.APIC(encoding=3,
+                   mime="image/jpeg",
+                   type=id3.PictureType.COVER_FRONT,
+                   desc="",
+                   data=image))
+  elif isinstance(container, mp4.MP4Tags):
+    if image is None:
+      container.pop("covr", None)
+    else:
+      container["covr"] = [
+          mp4.MP4Cover(image, imageformat=mp4.MP4Cover.FORMAT_JPEG)
+      ]
+  else:
+    raise TagError(
+        f"unsupported tag container {type(container).__name__}: {path}")
+
+  try:
+    audio.save()
+  except (OSError, mutagen.MutagenError) as err:
+    raise TagError(f"could not write art to {path}: {err}") from err
+  return True
+
+
 def read_duration(path: pathlib.Path) -> float | None:
   """Reads a file's playing time in seconds.
 

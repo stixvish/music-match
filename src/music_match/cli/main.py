@@ -23,7 +23,10 @@ from music_match.config import loader
 from music_match.db import connection
 from music_match.db import queries
 from music_match.db import schema
+from music_match.tagging import apply as apply_lib
+from music_match.tagging import art as art_lib
 from music_match.tagging import dedup as dedup_lib
+from music_match.tagging import fields as tag_fields
 from music_match.tagging import fingerprint as fp
 from music_match.tagging import genre as genre_lib
 from music_match.tagging import quality as quality_lib
@@ -1141,3 +1144,320 @@ def match_ignore(
     queries.mark_wont_match(conn, track_id, reason)
     conn.commit()
   typer.echo(f"marked as won't match: {file.name}")
+
+
+ArtStoreOption = Annotated[
+    pathlib.Path,
+    typer.Option("--art-store", help="Directory holding stored cover art.")]
+
+
+@app.command("apply")
+def apply_matches(
+    db: DbOption = connection.DEFAULT_DB_FILE,
+    art_store: ArtStoreOption = art_lib.DEFAULT_STORE_DIR,
+    source: SourceNameOption = None,
+    limit: Annotated[
+        int,
+        typer.
+        Option("--limit", help="Stop after this many tracks. 0 means no limit."
+              )] = 0,
+    include_review: Annotated[
+        bool,
+        typer.Option("--include-review",
+                     help="Also write matches that were queued for "
+                     "review.")] = False,
+    skip_art: Annotated[
+        bool,
+        typer.Option("--skip-art", help="Do not embed cover art.")] = False,
+    dry_run: DryRunOption = False,
+) -> None:
+  """Writes matched metadata into the audio files.
+
+  Every previous value is recorded in `tag_history` *before* the file is
+  touched, so `music-match undo` can put any of it back. Only matches the
+  matcher trusted are written unless --include-review is given.
+
+  Args:
+    db: Path to the SQLite database.
+    art_store: Directory holding stored cover art.
+    source: Limit to one configured source folder.
+    limit: Stop after this many tracks, or 0 for no limit.
+    include_review: Also write matches queued for review.
+    skip_art: Do not embed cover art.
+    dry_run: Report what would be written without touching anything.
+  """
+  wanted = [match_lib.MatchStatus.MATCHED]
+  if include_review:
+    wanted.append(match_lib.MatchStatus.REVIEW)
+  store = art_lib.ArtStore(art_store)
+
+  with connection.open_db(db) as conn:
+    pending = [
+        row for row in queries.tracks_with_matches(conn, source)
+        if row["match_status"] in wanted
+    ]
+    if limit:
+      pending = pending[:limit]
+    typer.echo(f"{len(pending)} track(s) to write "
+               f"({_joined(wanted)})")
+    if dry_run:
+      _report_planned_writes(conn, pending, store, skip_art)
+      return
+    written, unchanged, failed = _write_all(conn, pending, store, skip_art)
+
+  typer.echo(f"wrote {written}, unchanged {unchanged}, failed {failed}")
+
+
+def _report_planned_writes(conn: sqlite3.Connection, pending: list[sqlite3.Row],
+                           store: art_lib.ArtStore, skip_art: bool) -> None:
+  """Prints what a real run would change, touching nothing.
+
+  Args:
+    conn: An open database connection.
+    pending: The track rows to consider.
+    store: Where stored art lives.
+    skip_art: Whether art is being skipped.
+  """
+  total = 0
+  for row in pending:
+    path = pathlib.Path(row["path"])
+    tags = _matched_tags(row)
+    if tags is None:
+      continue
+    try:
+      result = apply_lib.apply_tags(conn,
+                                    track_id=int(row["id"]),
+                                    path=path,
+                                    tags=tags,
+                                    art_hash=None,
+                                    store=store if not skip_art else None,
+                                    dry_run=True)
+    except (tag_io.TagError, art_lib.ArtError) as err:
+      typer.echo(f"  {path.name}: {err}", err=True)
+      continue
+    planned = sorted(result.changes)
+    # A dry run deliberately does not download anything, so it cannot
+    # know the new cover's hash — but saying nothing about art would
+    # under-report the largest change most files get.
+    if not skip_art and row["matched_art_url"]:
+      planned.append("album_art (would fetch)")
+    if planned:
+      total += 1
+      typer.echo(f"  {path.name}: {_joined(planned)}")
+  typer.echo(f"dry run: would change up to {total} file(s)")
+
+
+def _write_all(conn: sqlite3.Connection, pending: list[sqlite3.Row],
+               store: art_lib.ArtStore, skip_art: bool) -> tuple[int, int, int]:
+  """Writes every pending match, recording history first.
+
+  Args:
+    conn: An open database connection.
+    pending: The track rows to write.
+    store: Where stored art lives.
+    skip_art: Whether to skip cover art.
+
+  Returns:
+    (written, unchanged, failed) counts.
+  """
+  written = unchanged = failed = 0
+  for position, row in enumerate(pending, start=1):
+    path = pathlib.Path(row["path"])
+    tags = _matched_tags(row)
+    if tags is None:
+      continue
+    try:
+      art_hash = None if skip_art else _stored_art(store,
+                                                   row["matched_art_url"])
+      result = apply_lib.apply_tags(conn,
+                                    track_id=int(row["id"]),
+                                    path=path,
+                                    tags=tags,
+                                    art_hash=art_hash,
+                                    store=store)
+    except (tag_io.TagError, art_lib.ArtError) as err:
+      failed += 1
+      typer.echo(f"  failed {path.name}: {err}", err=True)
+      continue
+    if result.wrote:
+      written += 1
+    else:
+      unchanged += 1
+    if position % 25 == 0 or position == len(pending):
+      typer.echo(f"  {position}/{len(pending)}")
+  return (written, unchanged, failed)
+
+
+def _stored_art(store: art_lib.ArtStore, url: str | None) -> str | None:
+  """Fetches and stores a cover image, returning its content hash.
+
+  Args:
+    store: Where stored art lives.
+    url: The image URL recorded with the match, if any.
+
+  Returns:
+    The stored image's hash, or None if there was no URL.
+
+  Raises:
+    ArtError: If the image cannot be fetched or stored.
+  """
+  return store.store_url(url) if url else None
+
+
+def _matched_tags(row: sqlite3.Row) -> tag_fields.TrackTags | None:
+  """Reads the proposed tags recorded against a track.
+
+  Args:
+    row: A track row carrying `matched_tags_json`.
+
+  Returns:
+    The proposed tags, or None if the row has none or they are corrupt.
+  """
+  raw = row["matched_tags_json"]
+  if not raw:
+    return None
+  try:
+    values = json.loads(raw)
+  except json.JSONDecodeError:
+    return None
+  return tag_fields.TrackTags.from_mapping(values)
+
+
+@app.command("undo")
+def undo(
+    file: Annotated[pathlib.Path,
+                    typer.Argument(help="Audio file to inspect or revert.")],
+    db: DbOption = connection.DEFAULT_DB_FILE,
+    art_store: ArtStoreOption = art_lib.DEFAULT_STORE_DIR,
+    last: Annotated[
+        bool,
+        typer.Option("--last", help="Revert the most recent write.")] = False,
+    to: Annotated[
+        str | None,
+        typer.Option("--to", help="Revert to the state before this batch."
+                    )] = None,
+    dry_run: DryRunOption = False,
+) -> None:
+  """Shows a file's tag history, or puts an earlier version back.
+
+  With no options this only prints the timeline. Reverting needs --last
+  or --to, and the revert is itself recorded, so it can be undone again.
+
+  Args:
+    file: The audio file.
+    db: Path to the SQLite database.
+    art_store: Directory holding stored cover art.
+    last: Revert the most recent write.
+    to: Revert to the state before this batch.
+    dry_run: Report what would be restored without writing.
+  """
+  with connection.open_db(db) as conn:
+    track_id = queries.track_id_for_path(conn, file)
+    if track_id is None:
+      typer.echo(f"error: {file} is not indexed", err=True)
+      raise typer.Exit(code=1)
+    batches = queries.batches_for_track(conn, track_id)
+    if not batches:
+      typer.echo("no recorded changes for this file")
+      return
+
+    if not last and to is None:
+      _show_history(conn, track_id, batches)
+      return
+
+    known = [batch for batch, _, _ in batches]
+    if last:
+      target = known[0]
+    else:
+      try:
+        target = resolve_batch(str(to), known)
+      except LookupError as err:
+        typer.echo(f"error: {err}", err=True)
+        raise typer.Exit(code=1) from err
+    try:
+      result = apply_lib.revert(conn,
+                                track_id=track_id,
+                                path=file,
+                                batch=target,
+                                store=art_lib.ArtStore(art_store),
+                                dry_run=dry_run)
+    except (tag_io.TagError, art_lib.ArtError) as err:
+      typer.echo(f"error: {err}", err=True)
+      raise typer.Exit(code=1) from err
+
+  if result.is_noop():
+    typer.echo("nothing to restore; the file already matches that point")
+    return
+  prefix = "dry run: would restore" if dry_run else "restored"
+  typer.echo(f"{prefix} {len(result.changes)} field(s)")
+  for field, (old, new) in sorted(result.changes.items()):
+    typer.echo(f"  {field.ljust(14)} {_short(old)} -> {_short(new)}")
+
+
+def resolve_batch(wanted: str, known: list[str]) -> str:
+  """Finds a batch from a prefix of its identifier.
+
+  The timeline prints shortened ids because a full one is 32 hex
+  characters. Requiring the full id back would mean the value shown can
+  never be the value typed.
+
+  Args:
+    wanted: The identifier or a prefix of it.
+    known: Every batch recorded for this track.
+
+  Returns:
+    The full identifier.
+
+  Raises:
+    LookupError: If the prefix matches no batch, or more than one.
+  """
+  matches = [batch for batch in known if batch.startswith(wanted)]
+  if not matches:
+    raise LookupError(f"no such batch {wanted}")
+  if len(matches) > 1:
+    raise LookupError(f"{wanted} matches {len(matches)} batches; use more"
+                      " characters")
+  return matches[0]
+
+
+def _show_history(conn: sqlite3.Connection, track_id: int,
+                  batches: list[tuple[str, str, int]]) -> None:
+  """Prints a track's change timeline, newest first.
+
+  Args:
+    conn: An open database connection.
+    track_id: The track's row id.
+    batches: The track's writes, newest first.
+  """
+  rows = queries.history_for_track(conn, track_id)
+  by_batch: dict[str, list[sqlite3.Row]] = {}
+  for row in rows:
+    by_batch.setdefault(str(row["batch"]), []).append(row)
+
+  typer.echo(f"{len(batches)} recorded change(s), newest first:\n")
+  for batch, when, count in batches:
+    typer.echo(f"  {batch[:12]}  {when}  ({count} field(s))")
+    for row in by_batch.get(batch, []):
+      field = str(row["field"]).ljust(14)
+      before = _short(row["old_value"])
+      after = _short(row["new_value"])
+      typer.echo(f"      {field} {before} -> {after}")
+  typer.echo("\nRevert with: music-match undo FILE --last"
+             " (or --to <batch>)")
+
+
+def _short(value: object) -> str:
+  """Renders a tag value briefly for the timeline.
+
+  Args:
+    value: The value, which may be an art content hash.
+
+  Returns:
+    A short display form. Hashes are truncated; None reads as "(unset)".
+  """
+  if value is None:
+    return "(unset)"
+  text = str(value)
+  if len(text) == 64 and all(ch in "0123456789abcdef" for ch in text):
+    return f"art:{text[:12]}"
+  return text if len(text) <= 40 else text[:37] + "..."

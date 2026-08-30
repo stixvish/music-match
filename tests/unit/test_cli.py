@@ -964,3 +964,160 @@ def test_probe_falls_back_to_the_filename(tmp_path: pathlib.Path) -> None:
   assert query.is_usable()
   assert query.title == "All Nighter"
   assert query.artist == "Tiesto"
+
+
+def matched_library(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    status: str = "matched") -> tuple[pathlib.Path, pathlib.Path]:
+  """Builds a library with one track carrying a recorded match.
+
+  Args:
+    tmp_path: The temporary directory.
+    monkeypatch: pytest's patching fixture.
+    status: The match status to record.
+
+  Returns:
+    The audio file and the database path.
+  """
+  config, db_path = indexed_library(tmp_path, monkeypatch)
+  fake_matcher(monkeypatch, a_match(status=status))
+  runner.invoke(
+      main.app,
+      ["match", "run", "--sources",
+       str(config), "--db",
+       str(db_path)])
+  return (tmp_path / "yt-dlp" / "a.m4a", db_path)
+
+
+def test_apply_writes_matched_tags(tmp_path: pathlib.Path,
+                                   monkeypatch: pytest.MonkeyPatch) -> None:
+  """The proposal recorded by `match` is written into the file."""
+  audio, db_path = matched_library(tmp_path, monkeypatch)
+  result = runner.invoke(main.app, [
+      "apply", "--db",
+      str(db_path), "--art-store",
+      str(tmp_path / "art"), "--skip-art"
+  ])
+  assert result.exit_code == 0
+  assert tag_io.read_tags(audio).album == "21"
+
+
+def test_apply_dry_run_touches_nothing(tmp_path: pathlib.Path,
+                                       monkeypatch: pytest.MonkeyPatch) -> None:
+  """A dry run reports the plan and leaves the file alone."""
+  audio, db_path = matched_library(tmp_path, monkeypatch)
+  before = audio.read_bytes()
+  result = runner.invoke(main.app, ["apply", "--db", str(db_path), "--dry-run"])
+  assert "dry run" in result.stdout
+  assert audio.read_bytes() == before
+
+
+def test_apply_skips_matches_queued_for_review(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A doubtful match must not be written without being asked for."""
+  audio, db_path = matched_library(tmp_path, monkeypatch, status="review")
+  runner.invoke(main.app, ["apply", "--db", str(db_path), "--skip-art"])
+  assert tag_io.read_tags(audio).album != "21"
+
+
+def test_apply_can_include_review_matches(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """`--include-review` opts into writing the doubtful ones."""
+  audio, db_path = matched_library(tmp_path, monkeypatch, status="review")
+  runner.invoke(
+      main.app,
+      ["apply", "--db",
+       str(db_path), "--skip-art", "--include-review"])
+  assert tag_io.read_tags(audio).album == "21"
+
+
+def test_undo_lists_the_timeline(tmp_path: pathlib.Path,
+                                 monkeypatch: pytest.MonkeyPatch) -> None:
+  """With no options, undo only shows what happened."""
+  audio, db_path = matched_library(tmp_path, monkeypatch)
+  runner.invoke(main.app, ["apply", "--db", str(db_path), "--skip-art"])
+  result = runner.invoke(main.app, ["undo", str(audio), "--db", str(db_path)])
+  assert "recorded change" in result.stdout
+  assert "album" in result.stdout
+  assert tag_io.read_tags(audio).album == "21"
+
+
+def test_undo_last_restores_the_previous_values(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The whole point: what was written can be put back."""
+  audio, db_path = matched_library(tmp_path, monkeypatch)
+  runner.invoke(main.app, ["apply", "--db", str(db_path), "--skip-art"])
+  assert tag_io.read_tags(audio).album == "21"
+  result = runner.invoke(
+      main.app, ["undo", str(audio), "--db",
+                 str(db_path), "--last"])
+  assert result.exit_code == 0
+  assert tag_io.read_tags(audio).album != "21"
+
+
+def test_undo_dry_run_restores_nothing(tmp_path: pathlib.Path,
+                                       monkeypatch: pytest.MonkeyPatch) -> None:
+  """A dry-run undo reports without writing."""
+  audio, db_path = matched_library(tmp_path, monkeypatch)
+  runner.invoke(main.app, ["apply", "--db", str(db_path), "--skip-art"])
+  result = runner.invoke(
+      main.app,
+      ["undo", str(audio), "--db",
+       str(db_path), "--last", "--dry-run"])
+  assert "would restore" in result.stdout
+  assert tag_io.read_tags(audio).album == "21"
+
+
+def test_undo_needs_an_indexed_file(tmp_path: pathlib.Path) -> None:
+  """A file that was never scanned has no history to show."""
+  result = runner.invoke(
+      main.app,
+      ["undo",
+       str(tmp_path / "nope.m4a"), "--db",
+       str(tmp_path / "state.db")])
+  assert result.exit_code == 1
+
+
+def test_undo_rejects_an_unknown_batch(tmp_path: pathlib.Path,
+                                       monkeypatch: pytest.MonkeyPatch) -> None:
+  """A mistyped batch id is refused rather than silently doing nothing."""
+  audio, db_path = matched_library(tmp_path, monkeypatch)
+  runner.invoke(main.app, ["apply", "--db", str(db_path), "--skip-art"])
+  result = runner.invoke(
+      main.app,
+      ["undo", str(audio), "--db",
+       str(db_path), "--to", "not-a-batch"])
+  assert result.exit_code == 1
+
+
+def test_undo_accepts_the_shortened_batch_id(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The id the timeline prints has to be the id `--to` accepts.
+
+  The timeline shortens a 32-character identifier for readability, so
+  requiring the full one back would make the displayed value useless.
+  """
+  audio, db_path = matched_library(tmp_path, monkeypatch)
+  runner.invoke(main.app, ["apply", "--db", str(db_path), "--skip-art"])
+  listing = runner.invoke(
+      main.app,
+      ["undo", str(audio), "--db", str(db_path)]).stdout
+  shown = [
+      line.strip().split()[0]
+      for line in listing.splitlines()
+      if line.startswith("  ") and len(line.strip().split()[0]) == 12
+  ]
+  assert shown, "no batch id was printed"
+  result = runner.invoke(
+      main.app,
+      ["undo", str(audio), "--db",
+       str(db_path), "--to", shown[0]])
+  assert result.exit_code == 0
+  assert tag_io.read_tags(audio).album != "21"
+
+
+def test_undo_rejects_an_ambiguous_prefix() -> None:
+  """A prefix matching two writes is refused rather than guessed at."""
+  with pytest.raises(LookupError, match="matches 2 batches"):
+    main.resolve_batch("ab", ["abcd", "abef"])

@@ -96,8 +96,9 @@ def test_tag_history_cascades_on_track_delete(conn: sqlite3.Connection) -> None:
   """Foreign keys are enforced, so history dies with its track."""
   track_id = insert_track(conn)
   conn.execute(
-      "INSERT INTO tag_history (track_id, field, old_value, new_value)"
-      " VALUES (?, ?, ?, ?)", (track_id, "genre", "Music", "Deep House"))
+      "INSERT INTO tag_history (track_id, batch, field, old_value, new_value)"
+      " VALUES (?, ?, ?, ?, ?)",
+      (track_id, "batch-1", "genre", "Music", "Deep House"))
   conn.execute("DELETE FROM tracks WHERE id = ?", (track_id,))
   remaining = conn.execute("SELECT count(*) AS n FROM tag_history").fetchone()
   assert remaining["n"] == 0
@@ -107,8 +108,8 @@ def test_tag_history_rejects_unknown_track(conn: sqlite3.Connection) -> None:
   """History rows cannot reference a track that does not exist."""
   with pytest.raises(sqlite3.IntegrityError):
     conn.execute(
-        "INSERT INTO tag_history (track_id, field, new_value)"
-        " VALUES (?, ?, ?)", (999, "genre", "Deep House"))
+        "INSERT INTO tag_history (track_id, batch, field, new_value)"
+        " VALUES (?, ?, ?, ?)", (999, "batch-1", "genre", "Deep House"))
 
 
 def test_album_art_history_stores_a_hash(conn: sqlite3.Connection) -> None:
@@ -116,8 +117,9 @@ def test_album_art_history_stores_a_hash(conn: sqlite3.Connection) -> None:
   track_id = insert_track(conn)
   digest = "a" * 64
   conn.execute(
-      "INSERT INTO tag_history (track_id, field, old_value, new_value)"
-      " VALUES (?, ?, ?, ?)", (track_id, "album_art", None, digest))
+      "INSERT INTO tag_history (track_id, batch, field, old_value, new_value)"
+      " VALUES (?, ?, ?, ?, ?)",
+      (track_id, "batch-1", "album_art", None, digest))
   row = conn.execute(
       "SELECT new_value FROM tag_history WHERE field = 'album_art'").fetchone()
   assert row["new_value"] == digest
