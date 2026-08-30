@@ -78,6 +78,7 @@ uv run music-match match run            # match the library, record proposals
 uv run music-match match summary        # how many matched / need review
 uv run music-match apply                # write the matches into the files
 uv run music-match undo FILE            # show a file's history, or revert
+uv run music-match video-rips list      # audio that came from a music video
 ```
 
 ### Finding duplicates
@@ -253,6 +254,33 @@ and for the WAV files that name is the only metadata they have.
 would have picked. It measures whether this is the right recording and
 whether the sources agree. A track can be confidently matched to a
 compilation that legitimately contains it.
+
+### Video rips
+
+Audio taken from a music video is not the album track — it often carries
+an intro, dialogue or applause, and sometimes a different mix. Matching
+one wastes the API call and tends to produce a confident match to a
+recording the file does not contain.
+
+```bash
+uv run music-match video-rips list                 # what looks like a rip
+uv run music-match video-rips quarantine           # report only
+uv run music-match video-rips quarantine --apply   # move them aside
+uv run music-match video-rips restore FILE         # once you have checked
+```
+
+Detection is on the filename and embedded title only — cheap, and run
+before anything costs a request. Flagged files move to
+`possible-video-rip/<source>/` under the configured `[review]` path and
+are **skipped by matching** until you put them back. Only folders with
+`check_for_video_rips = true` are examined, which is what that setting in
+`sources.toml` has always been for.
+
+The marker list comes from what this library actually contains: **113 of
+2329 files** carry one. A *lyric video* or *visualiser* is deliberately
+**not** flagged — the picture is decoration and the audio is the studio
+master, so quarantining those would queue up a tenth of the library for
+nothing.
 
 ### Writing tags
 

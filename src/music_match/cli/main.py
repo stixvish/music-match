@@ -34,6 +34,7 @@ from music_match.sources import SOURCE_TYPES
 from music_match.sources import base as source_base
 from music_match.sources import build_all
 from music_match.tagging import tags as tag_io
+from music_match.tagging import videorip as videorip_lib
 
 app = typer.Typer(
     help="Tag a personal music library from public metadata sources.",
@@ -45,6 +46,8 @@ config_app = typer.Typer(help="Inspect resolved configuration.",
 db_app = typer.Typer(help="Manage local SQLite state.", no_args_is_help=True)
 tags_app = typer.Typer(help="Read file tags.", no_args_is_help=True)
 genre_app = typer.Typer(help="Local genre detection.", no_args_is_help=True)
+rips_app = typer.Typer(help="Find and quarantine video rips.",
+                       no_args_is_help=True)
 match_app = typer.Typer(help="Match tracks against metadata sources.",
                         no_args_is_help=True)
 app.add_typer(config_app, name="config")
@@ -52,6 +55,7 @@ app.add_typer(db_app, name="db")
 app.add_typer(tags_app, name="tags")
 app.add_typer(genre_app, name="genre")
 app.add_typer(match_app, name="match")
+app.add_typer(rips_app, name="video-rips")
 
 SourcesOption = Annotated[
     pathlib.Path,
@@ -1461,3 +1465,201 @@ def _short(value: object) -> str:
   if len(text) == 64 and all(ch in "0123456789abcdef" for ch in text):
     return f"art:{text[:12]}"
   return text if len(text) <= 40 else text[:37] + "..."
+
+
+QUARANTINE_SUBFOLDER = "possible-video-rip"
+
+
+@rips_app.command("list")
+def rips_list(
+    sources: SourcesOption = loader.DEFAULT_SOURCES_FILE,
+    source: SourceNameOption = None,
+) -> None:
+  """Reports files that look like rips from a music video.
+
+  Only folders with `check_for_video_rips` set are examined. Nothing is
+  moved.
+
+  Args:
+    sources: Path to sources.toml.
+    source: Limit to one configured source folder.
+  """
+  sources_config = _load_sources_or_exit(sources)
+  found = _find_rips(sources_config, source)
+  if not found:
+    typer.echo("no suspected video rips")
+    return
+  for item, detection in found:
+    typer.echo(f"  {item.path.name}")
+    typer.echo(f"      {detection.describe()}")
+  typer.echo(f"\n{len(found)} suspected video rip(s)."
+             " Quarantine them with: music-match video-rips quarantine --apply")
+
+
+@rips_app.command("quarantine")
+def rips_quarantine(
+    sources: SourcesOption = loader.DEFAULT_SOURCES_FILE,
+    db: DbOption = connection.DEFAULT_DB_FILE,
+    source: SourceNameOption = None,
+    apply_moves: Annotated[
+        bool,
+        typer.Option("--apply",
+                     help="Actually move the files. Without this, the scan "
+                     "only reports.")] = False,
+) -> None:
+  """Moves suspected video rips aside for a human to confirm.
+
+  Files go to a `possible-video-rip` folder under the configured review
+  path, and are skipped by matching until you put them back. Reports
+  without touching anything unless --apply is given.
+
+  Args:
+    sources: Path to sources.toml.
+    db: Path to the SQLite database.
+    source: Limit to one configured source folder.
+    apply_moves: Perform the moves rather than only reporting them.
+  """
+  sources_config = _load_sources_or_exit(sources)
+  found = _find_rips(sources_config, source)
+  destination = sources_config.review_path / QUARANTINE_SUBFOLDER
+  typer.echo(f"{len(found)} suspected video rip(s)")
+  if not found:
+    return
+  if not apply_moves:
+    for item, detection in found[:20]:
+      typer.echo(f"  {item.path.name}: {detection.describe()}")
+    if len(found) > 20:
+      typer.echo(f"  ... and {len(found) - 20} more")
+    typer.echo(f"reported only. Re-run with --apply to move them to"
+               f" {destination}")
+    return
+
+  moved = 0
+  with connection.open_db(db) as conn:
+    for item, _ in found:
+      target = destination / item.source.name / item.path.name
+      try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.exists():
+          typer.echo(f"  skipped {item.path.name}: already quarantined",
+                     err=True)
+          continue
+        shutil.move(str(item.path), str(target))
+      except OSError as err:
+        typer.echo(f"  could not move {item.path.name}: {err}", err=True)
+        continue
+      track_id = queries.track_id_for_path(conn, item.path)
+      if track_id is not None:
+        queries.move_track(conn, track_id, target)
+        queries.set_match_status(conn, track_id, "quarantined")
+        conn.commit()
+      moved += 1
+  typer.echo(f"quarantined {moved} file(s) to {destination}")
+
+
+@rips_app.command("restore")
+def rips_restore(
+    file: Annotated[pathlib.Path,
+                    typer.Argument(help="Quarantined file to put back.")],
+    sources: SourcesOption = loader.DEFAULT_SOURCES_FILE,
+    db: DbOption = connection.DEFAULT_DB_FILE,
+) -> None:
+  """Returns a quarantined file to its source folder.
+
+  Use once you have confirmed the audio is fine. The track becomes
+  eligible for matching again.
+
+  Args:
+    file: The quarantined file.
+    sources: Path to sources.toml.
+    db: Path to the SQLite database.
+  """
+  sources_config = _load_sources_or_exit(sources)
+  quarantine_root = sources_config.review_path / QUARANTINE_SUBFOLDER
+  # Restoring is a move *into* the library, so it only accepts files that
+  # are actually in quarantine. Without this, any path whose parent
+  # happened to be named after a source folder could be moved in.
+  if not _is_within(file, quarantine_root):
+    typer.echo(f"error: {file} is not in {quarantine_root}", err=True)
+    raise typer.Exit(code=1)
+  folder = sources_config.folders.get(file.parent.name)
+  if folder is None:
+    typer.echo(
+        f"error: cannot tell which source {file.name} came from."
+        f" Expected it under {QUARANTINE_SUBFOLDER}/<source name>/",
+        err=True)
+    raise typer.Exit(code=1)
+
+  target = folder.path / file.name
+  if target.exists():
+    typer.echo(f"error: {target} already exists", err=True)
+    raise typer.Exit(code=1)
+  try:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(file), str(target))
+  except OSError as err:
+    typer.echo(f"error: {err}", err=True)
+    raise typer.Exit(code=1) from err
+
+  with connection.open_db(db) as conn:
+    track_id = queries.track_id_for_path(conn, file)
+    if track_id is not None:
+      queries.move_track(conn, track_id, target)
+      queries.set_match_status(conn, track_id, "pending")
+      conn.commit()
+  typer.echo(f"restored {file.name} to {folder.path}")
+
+
+def _is_within(path: pathlib.Path, root: pathlib.Path) -> bool:
+  """Returns whether a path lies inside a directory.
+
+  Args:
+    path: The path to test.
+    root: The directory it should be under.
+
+  Returns:
+    True if `path` is inside `root`.
+  """
+  try:
+    path.resolve().relative_to(root.resolve())
+  except ValueError:
+    return False
+  return True
+
+
+def _find_rips(
+    sources_config: loader.SourcesConfig, source: str | None
+) -> list[tuple[library.LibraryFile, videorip_lib.Detection]]:
+  """Finds suspected video rips in the configured source folders.
+
+  Args:
+    sources_config: The loaded source configuration.
+    source: Limit to one configured source folder.
+
+  Returns:
+    Each suspected file with the detection that flagged it.
+
+  Raises:
+    typer.Exit: If a named source is unknown or a folder is missing.
+  """
+  try:
+    files = list(library.walk(sources_config, source))
+  except KeyError:
+    typer.echo(f"error: no source folder named '{source}'", err=True)
+    raise typer.Exit(code=1) from None
+  except FileNotFoundError as err:
+    typer.echo(f"error: {err}", err=True)
+    raise typer.Exit(code=1) from err
+
+  found = []
+  for item in files:
+    if not item.source.check_for_video_rips:
+      continue
+    try:
+      title = tag_io.read_tags(item.path).title
+    except tag_io.TagError:
+      title = None
+    detection = videorip_lib.detect(item.path, title)
+    if detection.is_rip:
+      found.append((item, detection))
+  return found
