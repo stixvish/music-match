@@ -9,6 +9,11 @@ Album art is deliberately *not* stored here. Covers are content-addressed
 files under `.music-match/art-store/<sha256>.jpg`; a `tag_history` row for
 `field = 'album_art'` holds the hash, not the bytes.
 
+The `matched_*` columns hold the *proposed* metadata, not the file's
+current tags: matching decides what should be written, and step 6 decides
+whether and when to write it. Keeping the proposal separate is what lets a
+low-confidence match sit in a review queue without touching the file.
+
 `genre_confidence` sits beside `detected_genre` because the label on its
 own is not worth much: measured against known tracks, the model's
 top-level genre is right about 22% of the time below 0.15 confidence and
@@ -19,7 +24,7 @@ database and slow every query that touches the table, including ones with
 nothing to do with art.
 """
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 TABLES = ("tracks", "tag_history", "download_archive", "wont_match")
 
@@ -41,6 +46,11 @@ CREATE TABLE IF NOT EXISTS tracks (
   duration_seconds REAL,
   detected_genre   TEXT,
   genre_confidence REAL,
+  matched_source   TEXT,
+  match_confidence REAL,
+  matched_tags_json TEXT,
+  matched_art_url  TEXT,
+  matched_at       TEXT,
   source_video_id  TEXT,
   tags_json        TEXT,
   match_status     TEXT    NOT NULL DEFAULT 'pending'
@@ -86,6 +96,13 @@ CREATE TABLE IF NOT EXISTS wont_match (
 # already has every column, so these only run on one that predates them.
 MIGRATIONS: dict[int, tuple[str, ...]] = {
     1: ("ALTER TABLE tracks ADD COLUMN genre_confidence REAL",),
+    2: (
+        "ALTER TABLE tracks ADD COLUMN matched_source TEXT",
+        "ALTER TABLE tracks ADD COLUMN match_confidence REAL",
+        "ALTER TABLE tracks ADD COLUMN matched_tags_json TEXT",
+        "ALTER TABLE tracks ADD COLUMN matched_art_url TEXT",
+        "ALTER TABLE tracks ADD COLUMN matched_at TEXT",
+    ),
 }
 
 SCHEMA_STATEMENTS = (

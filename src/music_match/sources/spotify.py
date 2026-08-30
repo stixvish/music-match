@@ -143,9 +143,12 @@ class SpotifySource(base.MetadataSource):
         track_total=album.get("total_tracks"),
         disc_number=item.get("disc_number"),
     )
+    millis = item.get("duration_ms")
     return base.SourceResult(source=self.name,
                              source_id=str(item.get("id", "")),
                              tags=tags,
+                             duration_seconds=float(millis) /
+                             1000 if millis else None,
                              art_url=art_url,
                              art_size=art_size)
 

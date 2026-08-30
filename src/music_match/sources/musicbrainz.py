@@ -111,10 +111,12 @@ class MusicBrainzSource(base.MetadataSource):
         track_number=media.get("position"),
         track_total=release.get("track-count"),
     )
+    length = item.get("length")
     return base.SourceResult(
         source=self.name,
         source_id=recording_id,
         tags=tags,
+        duration_seconds=float(length) / 1000 if length else None,
         extra={"release_id": str(release.get("id", ""))} if release else {})
 
   def _isrc_for(self, recording_id: str) -> str | None:

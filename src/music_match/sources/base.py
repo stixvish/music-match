@@ -78,6 +78,10 @@ class SourceResult:
     tags: The metadata, in the same shape the tagging layer writes.
     art_url: A cover image URL, preferring the largest the source offers.
     art_size: The width in pixels of `art_url`, if the source says.
+    duration_seconds: The candidate's playing time, where the source
+      reports one. Compared against the file's own duration, this is what
+      separates a studio cut from a live version that matches on every
+      string field.
     extra: Source-specific detail worth showing in a probe but outside the
       target field list — Discogs label and catalogue number, say.
   """
@@ -86,6 +90,7 @@ class SourceResult:
   tags: TrackTags
   art_url: str | None = None
   art_size: int | None = None
+  duration_seconds: float | None = None
   extra: Mapping[str, str] = dataclasses.field(default_factory=dict)
 
 

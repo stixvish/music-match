@@ -96,6 +96,7 @@ def test_discogs_still_carries_credits() -> None:
                     reason="Discogs token not configured")
 def test_discogs_still_carries_label_and_catalogue_number() -> None:
   """Label and catalogue number are a large part of why Discogs leads."""
-  results = discogs.DiscogsSource(fetch_credits=False).search(QUERY, limit=1)
+  results = discogs.DiscogsSource(fetch_release_detail=False).search(QUERY,
+                                                                     limit=1)
   assert results
   assert "label" in results[0].extra

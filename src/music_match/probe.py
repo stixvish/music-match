@@ -139,11 +139,15 @@ class ProbeReport:
     return counts
 
 
-def query_for_file(path: pathlib.Path) -> SourceQuery:
+def query_for_file(path: pathlib.Path,
+                   duration_seconds: float | None = None) -> SourceQuery:
   """Builds a source query from a file's existing tags.
 
   Args:
     path: The audio file.
+    duration_seconds: The file's duration, if already known. Read from
+      the file when not given, since duration is the strongest signal for
+      telling a studio cut from a live version of the same song.
 
   Returns:
     The query.
@@ -151,7 +155,10 @@ def query_for_file(path: pathlib.Path) -> SourceQuery:
   Raises:
     TagError: If the file cannot be read.
   """
-  return SourceQuery.from_tags(tag_io.read_tags(path))
+  duration = duration_seconds
+  if duration is None:
+    duration = tag_io.read_duration(path)
+  return SourceQuery.from_tags(tag_io.read_tags(path), duration)
 
 
 def probe_query(query: SourceQuery,

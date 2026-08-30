@@ -129,6 +129,112 @@ def fingerprinted_paths(connection: sqlite3.Connection) -> set[str]:
   return {row["path"] for row in rows}
 
 
+def record_match(
+    connection: sqlite3.Connection,
+    *,
+    track_id: int,
+    source: str | None,
+    confidence: float,
+    status: str,
+    tags_json: str | None,
+    art_url: str | None,
+) -> None:
+  """Stores a proposed match against a track.
+
+  Writes the proposal only — the file itself is untouched until tag
+  writing applies it.
+
+  Args:
+    connection: An open connection.
+    track_id: The track's row id.
+    source: The source that supplied the most fields, if any.
+    confidence: How much to trust the match.
+    status: The resulting match status.
+    tags_json: The proposed tags, JSON-encoded.
+    art_url: The cover image to embed, if one was found.
+  """
+  connection.execute(
+      "UPDATE tracks SET matched_source = ?, match_confidence = ?,"
+      "  matched_tags_json = ?, matched_art_url = ?, match_status = ?,"
+      "  matched_at = datetime('now'), updated_at = datetime('now')"
+      " WHERE id = ?",
+      (source, confidence, tags_json, art_url, status, track_id))
+
+
+def matched_paths(connection: sqlite3.Connection) -> set[str]:
+  """Returns the paths of tracks that already have a match recorded.
+
+  Args:
+    connection: An open connection.
+
+  Returns:
+    The paths, as stored.
+  """
+  rows = connection.execute(
+      "SELECT path FROM tracks WHERE matched_at IS NOT NULL").fetchall()
+  return {row["path"] for row in rows}
+
+
+def match_status_counts(
+    connection: sqlite3.Connection) -> list[tuple[str, int]]:
+  """Summarises how many tracks are in each match state.
+
+  Args:
+    connection: An open connection.
+
+  Returns:
+    (status, count) pairs, most common first.
+  """
+  rows = connection.execute(
+      "SELECT match_status AS status, count(*) AS n FROM tracks"
+      " GROUP BY match_status ORDER BY n DESC, status").fetchall()
+  return [(str(row["status"]), int(row["n"])) for row in rows]
+
+
+def tracks_for_matching(
+    connection: sqlite3.Connection,
+    source_name: str | None = None) -> Iterator[sqlite3.Row]:
+  """Yields indexed tracks with what is known about them.
+
+  Args:
+    connection: An open connection.
+    source_name: Restrict to one source folder, or None for all.
+
+  Yields:
+    Rows with id, path, duration and detected genre.
+  """
+  sql = ("SELECT id, path, source_name, duration_seconds, detected_genre,"
+         "       genre_confidence, matched_at"
+         " FROM tracks WHERE id NOT IN (SELECT track_id FROM wont_match)")
+  parameters: tuple[str, ...] = ()
+  if source_name is not None:
+    sql += " AND source_name = ?"
+    parameters = (source_name,)
+  yield from connection.execute(sql + " ORDER BY path", parameters)
+
+
+def mark_wont_match(connection: sqlite3.Connection,
+                    track_id: int,
+                    reason: str | None = None) -> None:
+  """Marks a track as never going to match, so it stops being flagged.
+
+  For self-made edits and unofficial uploads that no public database will
+  ever hold.
+
+  Args:
+    connection: An open connection.
+    track_id: The track's row id.
+    reason: An optional note about why.
+  """
+  connection.execute(
+      "INSERT INTO wont_match (track_id, reason) VALUES (?, ?)"
+      " ON CONFLICT(track_id) DO UPDATE SET reason = excluded.reason",
+      (track_id, reason))
+  connection.execute(
+      "UPDATE tracks SET match_status = 'wont_match',"
+      " updated_at = datetime('now') WHERE id = ?", (track_id,))
+
+
 def genre_tagged_paths(connection: sqlite3.Connection) -> set[str]:
   """Returns the paths of tracks that already have a detected genre.
 

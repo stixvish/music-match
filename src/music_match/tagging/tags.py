@@ -103,6 +103,27 @@ def load_audio(path: pathlib.Path) -> mutagen.FileType:
   return audio
 
 
+def read_duration(path: pathlib.Path) -> float | None:
+  """Reads a file's playing time in seconds.
+
+  Duration is the strongest single signal for telling a studio cut from a
+  live version of the same song, so it is worth reading even when the
+  database has not indexed the file yet.
+
+  Args:
+    path: Path to the audio file.
+
+  Returns:
+    The duration, or None if the format does not report one.
+
+  Raises:
+    TagError: If the file cannot be read.
+  """
+  info = load_audio(path).info
+  length = getattr(info, "length", None)
+  return float(length) if length else None
+
+
 def read_tags(path: pathlib.Path) -> TrackTags:
   """Reads a file's metadata into a format-independent TrackTags.
 

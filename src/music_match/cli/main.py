@@ -5,6 +5,7 @@ resolved config, creating the database, dumping a file's tags,
 fingerprinting the library, and the duplicate scan.
 """
 
+import json
 import pathlib
 import shutil
 import sqlite3
@@ -16,6 +17,7 @@ import typer
 from music_match import __version__
 from music_match import library
 from music_match import probe as probe_lib
+from music_match.matching import matcher as match_lib
 from music_match.config import env
 from music_match.config import loader
 from music_match.db import connection
@@ -40,10 +42,13 @@ config_app = typer.Typer(help="Inspect resolved configuration.",
 db_app = typer.Typer(help="Manage local SQLite state.", no_args_is_help=True)
 tags_app = typer.Typer(help="Read file tags.", no_args_is_help=True)
 genre_app = typer.Typer(help="Local genre detection.", no_args_is_help=True)
+match_app = typer.Typer(help="Match tracks against metadata sources.",
+                        no_args_is_help=True)
 app.add_typer(config_app, name="config")
 app.add_typer(db_app, name="db")
 app.add_typer(tags_app, name="tags")
 app.add_typer(genre_app, name="genre")
+app.add_typer(match_app, name="match")
 
 SourcesOption = Annotated[
     pathlib.Path,
@@ -883,3 +888,248 @@ def _render_coverage(report: probe_lib.ProbeReport) -> None:
     typer.echo("")
     for source, count in failures.items():
       typer.echo(f"  {source} failed on {count}/{total}")
+
+
+AutoApplyOption = Annotated[
+    float,
+    typer.Option("--auto-apply",
+                 help="Confidence at or above which a match is trusted.")]
+ReviewFloorOption = Annotated[
+    float,
+    typer.Option("--review-floor",
+                 help="Confidence below which a match is discarded rather "
+                 "than queued for review.")]
+
+
+@match_app.command("run")
+def match_run(
+    sources: SourcesOption = loader.DEFAULT_SOURCES_FILE,
+    precedence: PrecedenceOption = loader.DEFAULT_PRECEDENCE_FILE,
+    db: DbOption = connection.DEFAULT_DB_FILE,
+    source: SourceNameOption = None,
+    limit: Annotated[
+        int,
+        typer.
+        Option("--limit", help="Stop after this many tracks. 0 means no limit."
+              )] = 0,
+    force: Annotated[
+        bool,
+        typer.Option("--force", help="Re-match tracks already done.")] = False,
+    auto_apply: AutoApplyOption = match_lib.DEFAULT_AUTO_APPLY,
+    review_floor: ReviewFloorOption = match_lib.DEFAULT_REVIEW_FLOOR,
+    dry_run: DryRunOption = False,
+) -> None:
+  """Matches indexed tracks against the metadata sources.
+
+  Records the proposal only. Nothing is written to any audio file: tag
+  writing is a separate step, so a low-confidence match can sit in the
+  review queue without touching anything.
+
+  Args:
+    sources: Path to sources.toml.
+    precedence: Path to precedence.toml.
+    db: Path to the SQLite database.
+    source: Limit to one configured source folder.
+    limit: Stop after this many tracks, or 0 for no limit.
+    force: Re-match tracks that already have a match.
+    auto_apply: Confidence at or above which a match is trusted.
+    review_floor: Confidence below which a match is discarded.
+    dry_run: Report what would be matched without writing.
+  """
+  env.load_env()
+  _load_sources_or_exit(sources)
+  precedence_config = _load_precedence_or_exit(precedence)
+  available = [item for item in build_all() if item.is_available()]
+  if not available:
+    typer.echo("error: no metadata source has credentials configured", err=True)
+    raise typer.Exit(code=1)
+  typer.echo(f"sources: {_joined(item.name for item in available)}")
+
+  with connection.open_db(db) as conn:
+    rows = list(queries.tracks_for_matching(conn, source))
+    pending = [row for row in rows if force or row["matched_at"] is None]
+    already = len(rows) - len(pending)
+    if limit:
+      pending = pending[:limit]
+    typer.echo(f"{len(rows)} tracks, {already} already matched, "
+               f"{len(pending)} to do")
+    if dry_run:
+      typer.echo(f"dry run: would match {len(pending)} tracks")
+      return
+    counts = _match_all(conn, pending, available, precedence_config, auto_apply,
+                        review_floor)
+
+  for status, count in sorted(counts.items()):
+    typer.echo(f"  {status}: {count}")
+
+
+def _match_all(conn: sqlite3.Connection, pending: list[sqlite3.Row],
+               available: list[source_base.MetadataSource],
+               precedence_config: loader.PrecedenceConfig, auto_apply: float,
+               review_floor: float) -> dict[str, int]:
+  """Matches each track and records the result as it completes.
+
+  Args:
+    conn: An open database connection.
+    pending: The track rows to match.
+    available: The sources with credentials.
+    precedence_config: The loaded precedence configuration.
+    auto_apply: Confidence at or above which a match is trusted.
+    review_floor: Confidence below which a match is discarded.
+
+  Returns:
+    Counts per resulting status.
+  """
+  counts: dict[str, int] = {}
+  for position, row in enumerate(pending, start=1):
+    path = pathlib.Path(row["path"])
+    try:
+      query = probe_lib.query_for_file(path, row["duration_seconds"])
+    except tag_io.TagError as err:
+      typer.echo(f"  skipped {path.name}: {err}", err=True)
+      continue
+    if not query.is_usable():
+      typer.echo(f"  skipped {path.name}: no title to search on", err=True)
+      continue
+
+    result = match_lib.match_track(query,
+                                   available,
+                                   precedence_config,
+                                   genre=row["detected_genre"],
+                                   auto_apply=auto_apply,
+                                   review_floor=review_floor)
+    queries.record_match(
+        conn,
+        track_id=int(row["id"]),
+        source=_primary_source(result),
+        confidence=result.confidence,
+        status=result.status,
+        tags_json=json.dumps(result.tags.as_dict()) if result.tags else None,
+        art_url=result.art_url)
+    conn.commit()
+    counts[result.status] = counts.get(result.status, 0) + 1
+    if position % 10 == 0 or position == len(pending):
+      typer.echo(f"  {position}/{len(pending)}")
+  return counts
+
+
+def _primary_source(result: match_lib.Match) -> str | None:
+  """Returns the source that supplied the most fields of a match.
+
+  Args:
+    result: The finished match.
+
+  Returns:
+    The source name, or None if nothing matched.
+  """
+  if not result.field_sources:
+    return None
+  counts: dict[str, int] = {}
+  for name in result.field_sources.values():
+    counts[name] = counts.get(name, 0) + 1
+  return max(counts, key=lambda name: counts[name])
+
+
+@match_app.command("show")
+def match_show(
+    file: Annotated[pathlib.Path,
+                    typer.Argument(help="Audio file to match.")],
+    precedence: PrecedenceOption = loader.DEFAULT_PRECEDENCE_FILE,
+    genre: Annotated[
+        str | None,
+        typer.Option("--genre",
+                     help="Detected genre, which selects the source "
+                     "order.")] = None,
+    auto_apply: AutoApplyOption = match_lib.DEFAULT_AUTO_APPLY,
+    review_floor: ReviewFloorOption = match_lib.DEFAULT_REVIEW_FLOOR,
+) -> None:
+  """Shows what one file would be matched to, and why.
+
+  Args:
+    file: The audio file to match.
+    precedence: Path to precedence.toml.
+    genre: Detected genre, selecting the source order.
+    auto_apply: Confidence at or above which a match is trusted.
+    review_floor: Confidence below which a match is discarded.
+  """
+  env.load_env()
+  precedence_config = _load_precedence_or_exit(precedence)
+  available = [item for item in build_all() if item.is_available()]
+  try:
+    query = probe_lib.query_for_file(file)
+  except tag_io.TagError as err:
+    typer.echo(f"error: {err}", err=True)
+    raise typer.Exit(code=1) from err
+
+  result = match_lib.match_track(query,
+                                 available,
+                                 precedence_config,
+                                 genre=genre,
+                                 auto_apply=auto_apply,
+                                 review_floor=review_floor)
+  typer.echo(f"query: {query.as_text()}")
+  typer.echo(f"status: {result.status}  confidence: {result.confidence}")
+  if result.is_empty():
+    typer.echo("no source returned a usable candidate")
+  typer.echo("\ncandidates:")
+  for name, candidate in result.candidates.items():
+    typer.echo(f"  {name}: {candidate.score.describe()}")
+    for reason in candidate.score.reasons:
+      typer.echo(f"      - {reason}")
+  typer.echo("\nproposed tags:")
+  for field, value in result.tags.as_dict().items():
+    origin = result.field_sources.get(field, "?")
+    typer.echo(f"  {field.ljust(14)} {str(value)[:52].ljust(54)} [{origin}]")
+  if result.art_url:
+    art_label = "album art".ljust(14)
+    typer.echo(f"  {art_label} {result.art_url[:52]}")
+  for note in result.notes:
+    typer.echo(f"\nnote: {note}")
+
+
+@match_app.command("summary")
+def match_summary(db: DbOption = connection.DEFAULT_DB_FILE) -> None:
+  """Summarises how many tracks are in each match state.
+
+  Args:
+    db: Path to the SQLite database.
+  """
+  with connection.open_db(db) as conn:
+    counts = queries.match_status_counts(conn)
+  if not counts:
+    typer.echo("no tracks indexed yet; run `music-match scan` first")
+    return
+  total = sum(count for _, count in counts)
+  typer.echo(f"{total} tracks")
+  for status, count in counts:
+    typer.echo(f"  {count:6d}  {status}")
+
+
+@match_app.command("ignore")
+def match_ignore(
+    file: Annotated[pathlib.Path,
+                    typer.Argument(help="Audio file to stop flagging.")],
+    db: DbOption = connection.DEFAULT_DB_FILE,
+    reason: Annotated[
+        str | None,
+        typer.Option("--reason", help="Why this will never match.")] = None,
+) -> None:
+  """Marks a track as never going to match.
+
+  For self-made edits and unofficial uploads no public database holds, so
+  they stop reappearing in the review queue on every run.
+
+  Args:
+    file: The audio file to mark.
+    db: Path to the SQLite database.
+    reason: An optional note about why.
+  """
+  with connection.open_db(db) as conn:
+    track_id = queries.track_id_for_path(conn, file)
+    if track_id is None:
+      typer.echo(f"error: {file} is not indexed; run `music-match scan` first",
+                 err=True)
+      raise typer.Exit(code=1)
+    queries.mark_wont_match(conn, track_id, reason)
+    conn.commit()
+  typer.echo(f"marked as won't match: {file.name}")

@@ -99,10 +99,12 @@ class ITunesSource(base.MetadataSource):
         disc_number=item.get("discNumber"),
         disc_total=item.get("discCount"),
     )
+    millis = item.get("trackTimeMillis")
     return base.SourceResult(
         source=self.name,
         source_id=str(item.get("trackId", "")),
         tags=tags,
+        duration_seconds=float(millis) / 1000 if millis else None,
         art_url=_upgrade_art(item.get("artworkUrl100")),
         art_size=_ART_SIZE if item.get("artworkUrl100") else None)
 
