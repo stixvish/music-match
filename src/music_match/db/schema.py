@@ -9,6 +9,11 @@ Album art is deliberately *not* stored here. Covers are content-addressed
 files under `.music-match/art-store/<sha256>.jpg`; a `tag_history` row for
 `field = 'album_art'` holds the hash, not the bytes.
 
+Every write shares one `batch` identifier across the rows it produced.
+Without it, "revert to a prior point" has no well-defined point to revert
+to — timestamps alone cannot reliably tell one write from another that
+happened in the same second.
+
 The `matched_*` columns hold the *proposed* metadata, not the file's
 current tags: matching decides what should be written, and step 6 decides
 whether and when to write it. Keeping the proposal separate is what lets a
@@ -24,7 +29,7 @@ database and slow every query that touches the table, including ones with
 nothing to do with art.
 """
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 TABLES = ("tracks", "tag_history", "download_archive", "wont_match")
 
@@ -66,6 +71,7 @@ _TAG_HISTORY = """
 CREATE TABLE IF NOT EXISTS tag_history (
   id         INTEGER PRIMARY KEY,
   track_id   INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+  batch      TEXT    NOT NULL,
   field      TEXT    NOT NULL,
   old_value  TEXT,
   new_value  TEXT,
@@ -96,6 +102,7 @@ CREATE TABLE IF NOT EXISTS wont_match (
 # already has every column, so these only run on one that predates them.
 MIGRATIONS: dict[int, tuple[str, ...]] = {
     1: ("ALTER TABLE tracks ADD COLUMN genre_confidence REAL",),
+    3: ("ALTER TABLE tag_history ADD COLUMN batch TEXT NOT NULL DEFAULT ''",),
     2: (
         "ALTER TABLE tracks ADD COLUMN matched_source TEXT",
         "ALTER TABLE tracks ADD COLUMN match_confidence REAL",

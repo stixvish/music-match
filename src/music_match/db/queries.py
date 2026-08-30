@@ -7,7 +7,7 @@ leave the database consistent.
 
 import pathlib
 import sqlite3
-from typing import Iterator
+from typing import Any, Iterator, Mapping
 
 
 def upsert_track(
@@ -213,6 +213,28 @@ def tracks_for_matching(
   yield from connection.execute(sql + " ORDER BY path", parameters)
 
 
+def tracks_with_matches(
+    connection: sqlite3.Connection,
+    source_name: str | None = None) -> Iterator[sqlite3.Row]:
+  """Yields tracks that have a recorded match proposal.
+
+  Args:
+    connection: An open connection.
+    source_name: Restrict to one source folder, or None for all.
+
+  Yields:
+    Rows with the proposal and the status it was given.
+  """
+  sql = ("SELECT id, path, match_status, match_confidence,"
+         "       matched_tags_json, matched_art_url"
+         " FROM tracks WHERE matched_tags_json IS NOT NULL")
+  parameters: tuple[str, ...] = ()
+  if source_name is not None:
+    sql += " AND source_name = ?"
+    parameters = (source_name,)
+  yield from connection.execute(sql + " ORDER BY path", parameters)
+
+
 def mark_wont_match(connection: sqlite3.Connection,
                     track_id: int,
                     reason: str | None = None) -> None:
@@ -275,6 +297,108 @@ def detected_genre_counts(
       (minimum_confidence,)).fetchall()
   return [(str(row["label"]), int(row["n"]), float(row["mean"])) for row in rows
          ]
+
+
+def log_changes(connection: sqlite3.Connection, *, track_id: int, batch: str,
+                changes: Mapping[str, tuple[Any, Any]]) -> None:
+  """Records tag changes before they are written to the file.
+
+  Called *before* the write, so an interrupted run leaves history for a
+  change that may not have happened rather than a change with no history.
+  The first is recoverable; the second silently loses the old value
+  forever.
+
+  Args:
+    connection: An open connection.
+    track_id: The track's row id.
+    batch: An identifier shared by every row from this one write.
+    changes: Field name to (old value, new value).
+  """
+  connection.executemany(
+      "INSERT INTO tag_history (track_id, batch, field, old_value, new_value)"
+      " VALUES (?, ?, ?, ?, ?)",
+      [(track_id, batch, field, _as_text(old), _as_text(new))
+       for field, (old, new) in changes.items()])
+
+
+def _as_text(value: Any) -> str | None:
+  """Renders a tag value for storage in the history table.
+
+  Args:
+    value: The value, of whatever type the field holds.
+
+  Returns:
+    Its text form, or None.
+  """
+  return None if value is None else str(value)
+
+
+def history_for_track(connection: sqlite3.Connection,
+                      track_id: int) -> list[sqlite3.Row]:
+  """Returns every recorded change for a track, oldest first.
+
+  Args:
+    connection: An open connection.
+    track_id: The track's row id.
+
+  Returns:
+    Rows with batch, field, old_value, new_value and changed_at.
+  """
+  return list(
+      connection.execute(
+          "SELECT batch, field, old_value, new_value, changed_at"
+          " FROM tag_history WHERE track_id = ?"
+          " ORDER BY changed_at, id", (track_id,)).fetchall())
+
+
+def batches_for_track(connection: sqlite3.Connection,
+                      track_id: int) -> list[tuple[str, str, int]]:
+  """Summarises a track's history as one entry per write.
+
+  Args:
+    connection: An open connection.
+    track_id: The track's row id.
+
+  Returns:
+    (batch, when, number of fields changed), newest first.
+  """
+  rows = connection.execute(
+      "SELECT batch, min(changed_at) AS when_, count(*) AS n"
+      " FROM tag_history WHERE track_id = ?"
+      " GROUP BY batch ORDER BY when_ DESC, batch DESC",
+      (track_id,)).fetchall()
+  return [(str(row["batch"]), str(row["when_"]), int(row["n"])) for row in rows]
+
+
+def values_to_restore(connection: sqlite3.Connection, track_id: int,
+                      batch: str) -> dict[str, str | None]:
+  """Finds the values a track held before a given write.
+
+  For each field touched at or after that write, the value to restore is
+  the *oldest* recorded `old_value` from that point on — undoing three
+  successive edits to a title must go back to what it was before the
+  first, not the second.
+
+  Args:
+    connection: An open connection.
+    track_id: The track's row id.
+    batch: The write to roll back to, inclusive.
+
+  Returns:
+    Field name to the value it should be restored to. None means the
+    field was previously unset.
+  """
+  rows = connection.execute(
+      "SELECT field, old_value FROM tag_history"
+      " WHERE track_id = ? AND changed_at >= ("
+      "   SELECT min(changed_at) FROM tag_history"
+      "   WHERE track_id = ? AND batch = ?)"
+      " ORDER BY changed_at DESC, id DESC",
+      (track_id, track_id, batch)).fetchall()
+  restore: dict[str, str | None] = {}
+  for row in rows:
+    restore[str(row["field"])] = row["old_value"]
+  return restore
 
 
 def move_track(connection: sqlite3.Connection, track_id: int,

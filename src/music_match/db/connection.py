@@ -59,9 +59,32 @@ def initialize(connection: sqlite3.Connection) -> int:
     if starting:
       for version in range(starting, schema.SCHEMA_VERSION):
         for statement in schema.MIGRATIONS.get(version, ()):
-          connection.execute(statement)
+          _migrate(connection, statement)
     connection.execute(f"PRAGMA user_version = {schema.SCHEMA_VERSION}")
   return schema.SCHEMA_VERSION
+
+
+def _migrate(connection: sqlite3.Connection, statement: str) -> None:
+  """Applies one migration statement, tolerating a column already there.
+
+  A database old enough to need migrating may still be missing a whole
+  table, which the CREATE statements above add — complete with the
+  columns a later migration also adds. The ALTER then finds the column
+  present. That is success, not failure.
+
+  Args:
+    connection: An open connection.
+    statement: The migration statement to run.
+
+  Raises:
+    sqlite3.OperationalError: For any failure other than the column
+      already existing.
+  """
+  try:
+    connection.execute(statement)
+  except sqlite3.OperationalError as err:
+    if "duplicate column name" not in str(err).lower():
+      raise
 
 
 def schema_version(connection: sqlite3.Connection) -> int:
