@@ -11,6 +11,7 @@ from typer import testing
 from tests.unit import conftest
 
 from music_match import __version__
+from music_match import probe as probe_lib
 from music_match.cli import main
 from music_match.db import connection
 from music_match.db import queries
@@ -760,13 +761,21 @@ def test_probe_reads_queries_from_files(
   assert "track.m4a" in result.stdout
 
 
-def test_probe_skips_a_file_with_no_title(
+def test_probe_uses_the_filename_when_a_file_is_untagged(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """An untagged file has nothing to search on and is skipped."""
-  audio = conftest.write_m4a(tmp_path / "untagged.m4a")
-  fake_sources(monkeypatch, {"spotify": fields.TrackTags(title="X")})
-  result = runner.invoke(main.app, ["probe", str(audio)])
-  assert result.exit_code == 1
+  """An untagged file is searched for by name rather than skipped.
+
+  This used to skip. It should not: nearly every file here is named
+  "Artist - Title", and for WAV that name is the only metadata there is.
+  """
+  config = build_source_tree(tmp_path, ("Tiesto - All Nighter.m4a",))
+  fake_sources(monkeypatch, {"spotify": fields.TrackTags(title="All Nighter")})
+  result = runner.invoke(
+      main.app,
+      ["probe", str(tmp_path / "yt-dlp" / "Tiesto - All Nighter.m4a")])
+  assert result.exit_code == 0
+  assert "All Nighter" in result.stdout
+  del config
 
 
 def test_probe_needs_something_to_probe(
@@ -783,3 +792,175 @@ def test_probe_rejects_an_unknown_source(
   fake_sources(monkeypatch, {"spotify": fields.TrackTags(title="X")})
   result = runner.invoke(main.app, ["probe", "--title", "X", "--only", "nope"])
   assert result.exit_code == 1
+
+
+def fake_matcher(monkeypatch: pytest.MonkeyPatch, result: object) -> None:
+  """Replaces the matcher so CLI tests need no network.
+
+  Args:
+    monkeypatch: pytest's patching fixture.
+    result: The Match to return for every track.
+  """
+  monkeypatch.setattr(main,
+                      "build_all",
+                      lambda names=None: [ProbeStub("spotify", None)])
+  monkeypatch.setattr(main.match_lib, "match_track",
+                      lambda *args, **kwargs: result)
+
+
+def a_match(status: str = "matched",
+            confidence: float = 0.95,
+            album: str = "21") -> object:
+  """Builds a Match for the CLI to record.
+
+  Args:
+    status: The match status.
+    confidence: The match confidence.
+    album: The album to propose.
+
+  Returns:
+    The constructed Match.
+  """
+  return main.match_lib.Match(tags=fields.TrackTags(title="Hello",
+                                                    artist="Adele",
+                                                    album=album),
+                              confidence=confidence,
+                              status=status,
+                              candidates={},
+                              field_sources={
+                                  "title": "spotify",
+                                  "album": "spotify"
+                              })
+
+
+def indexed_library(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch) -> tuple[pathlib.Path, pathlib.Path]:
+  """Builds a scanned library with one tagged track.
+
+  Args:
+    tmp_path: The temporary directory.
+    monkeypatch: pytest's patching fixture.
+
+  Returns:
+    The sources.toml path and the database path.
+  """
+  config = build_source_tree(tmp_path, ("a.m4a",))
+  tag_io.write_tags(tmp_path / "yt-dlp" / "a.m4a",
+                    fields.TrackTags(title="Hello", artist="Adele"))
+  fake_fingerprints(monkeypatch, {"a.m4a": BASE_VALUES})
+  db_path = tmp_path / "state.db"
+  runner.invoke(main.app,
+                ["scan", "--sources",
+                 str(config), "--db",
+                 str(db_path)])
+  return config, db_path
+
+
+def test_match_run_records_a_proposal(tmp_path: pathlib.Path,
+                                      monkeypatch: pytest.MonkeyPatch) -> None:
+  """A match is stored against the track without touching the file."""
+  config, db_path = indexed_library(tmp_path, monkeypatch)
+  before = (tmp_path / "yt-dlp" / "a.m4a").read_bytes()
+  fake_matcher(monkeypatch, a_match())
+
+  result = runner.invoke(
+      main.app,
+      ["match", "run", "--sources",
+       str(config), "--db",
+       str(db_path)])
+  assert result.exit_code == 0
+  with connection.open_db(db_path) as conn:
+    row = conn.execute("SELECT match_status, match_confidence,"
+                       " matched_tags_json FROM tracks").fetchone()
+  assert row["match_status"] == "matched"
+  assert row["match_confidence"] == pytest.approx(0.95)
+  assert "21" in row["matched_tags_json"]
+  # The proposal is recorded; writing it is a separate step.
+  assert (tmp_path / "yt-dlp" / "a.m4a").read_bytes() == before
+
+
+def test_match_run_dry_run_writes_nothing(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """`--dry-run` reports the work without recording any of it."""
+  config, db_path = indexed_library(tmp_path, monkeypatch)
+  fake_matcher(monkeypatch, a_match())
+  result = runner.invoke(main.app, [
+      "match", "run", "--sources",
+      str(config), "--db",
+      str(db_path), "--dry-run"
+  ])
+  assert "would match 1 tracks" in result.stdout
+  with connection.open_db(db_path) as conn:
+    assert conn.execute(
+        "SELECT matched_at FROM tracks").fetchone()["matched_at"] is None
+
+
+def test_match_run_is_resumable(tmp_path: pathlib.Path,
+                                monkeypatch: pytest.MonkeyPatch) -> None:
+  """A second run skips tracks that already have a match."""
+  config, db_path = indexed_library(tmp_path, monkeypatch)
+  fake_matcher(monkeypatch, a_match())
+  args = ["match", "run", "--sources", str(config), "--db", str(db_path)]
+  runner.invoke(main.app, args)
+  assert "1 already matched, 0 to do" in runner.invoke(main.app, args).stdout
+
+
+def test_match_summary_counts_statuses(tmp_path: pathlib.Path,
+                                       monkeypatch: pytest.MonkeyPatch) -> None:
+  """The summary is how the review queue is sized."""
+  config, db_path = indexed_library(tmp_path, monkeypatch)
+  fake_matcher(monkeypatch, a_match(status="review", confidence=0.6))
+  runner.invoke(
+      main.app,
+      ["match", "run", "--sources",
+       str(config), "--db",
+       str(db_path)])
+  result = runner.invoke(main.app, ["match", "summary", "--db", str(db_path)])
+  assert "review" in result.stdout
+
+
+def test_match_ignore_stops_a_track_being_matched(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A self-made edit marked won't-match drops out of the queue."""
+  config, db_path = indexed_library(tmp_path, monkeypatch)
+  track = tmp_path / "yt-dlp" / "a.m4a"
+  ignored = runner.invoke(main.app, [
+      "match", "ignore",
+      str(track), "--db",
+      str(db_path), "--reason", "self-made"
+  ])
+  assert ignored.exit_code == 0
+
+  fake_matcher(monkeypatch, a_match())
+  result = runner.invoke(
+      main.app,
+      ["match", "run", "--sources",
+       str(config), "--db",
+       str(db_path)])
+  assert "0 tracks" in result.stdout
+
+
+def test_match_ignore_needs_an_indexed_track(tmp_path: pathlib.Path) -> None:
+  """Marking a file that was never scanned says what to do."""
+  result = runner.invoke(main.app, [
+      "match", "ignore",
+      str(tmp_path / "nope.m4a"), "--db",
+      str(tmp_path / "state.db")
+  ])
+  assert result.exit_code == 1
+
+
+def test_probe_falls_back_to_the_filename(tmp_path: pathlib.Path) -> None:
+  """An untagged file is searched for by its name rather than skipped.
+
+  This is the normal case for WAV, whose tagging support is an
+  afterthought, and it is how the beatport folder gets matched at all.
+  """
+  folder = tmp_path / "yt-dlp"
+  folder.mkdir(parents=True, exist_ok=True)
+  audio = conftest.write_m4a(folder / "Tiesto - All Nighter.m4a")
+  query = probe_lib.query_for_file(audio)
+  assert query.is_usable()
+  assert query.title == "All Nighter"
+  assert query.artist == "Tiesto"

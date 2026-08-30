@@ -42,18 +42,20 @@ class DiscogsSource(base.MetadataSource):
   def __init__(self,
                client: http.HttpClient | None = None,
                *,
-               fetch_credits: bool = True) -> None:
+               fetch_release_detail: bool = True) -> None:
     """Sets up the source.
 
     Args:
       client: HTTP client to use. One is created if not given.
-      fetch_credits: Whether to spend an extra request per candidate on
-        the release lookup that carries credits and the tracklist.
+      fetch_release_detail: Whether to spend an extra request per candidate
+        on the release lookup. It carries the credits *and* the tracklist,
+        so turning it off also loses album, track title, mix name and
+        track number — not only credits.
     """
     super().__init__(client or http.HttpClient(
         user_agent="music-match/0.1.0 +https://github.com/stixvish",
         min_interval_seconds=MIN_INTERVAL_SECONDS))
-    self._fetch_credits = fetch_credits
+    self._fetch_release_detail = fetch_release_detail
 
   def is_available(self) -> bool:
     """Returns whether a Discogs token is configured."""
@@ -139,6 +141,8 @@ class DiscogsSource(base.MetadataSource):
     return base.SourceResult(source=self.name,
                              source_id=release_id,
                              tags=tags,
+                             duration_seconds=parse_duration(
+                                 track.get("duration")),
                              art_url=item.get("cover_image"),
                              extra=_extra(item))
 
@@ -153,7 +157,7 @@ class DiscogsSource(base.MetadataSource):
       The release document, or an empty mapping if the lookup was
       skipped or failed. Losing credits must not lose the candidate.
     """
-    if not self._fetch_credits or not release_id:
+    if not self._fetch_release_detail or not release_id:
       return {}
     try:
       body = self._client.get_json(RELEASE_URL.format(release_id=release_id),
@@ -312,6 +316,27 @@ def _mix_name(title: Any) -> str | None:
     return None
   mix, closed, _ = remainder.partition(")")
   return mix.strip() or None if closed else None
+
+
+def parse_duration(value: Any) -> float | None:
+  """Parses a Discogs track duration.
+
+  Discogs writes durations as "7:07", and occasionally "1:07:07" or an
+  empty string.
+
+  Args:
+    value: The `duration` field from a tracklist entry.
+
+  Returns:
+    The duration in seconds, or None if there is none to parse.
+  """
+  parts = str(value or "").strip().split(":")
+  if not parts or not all(part.isdigit() for part in parts):
+    return None
+  seconds = 0.0
+  for part in parts:
+    seconds = seconds * 60 + int(part)
+  return seconds or None
 
 
 def position_number(position: Any) -> int | None:

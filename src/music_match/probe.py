@@ -16,6 +16,7 @@ import dataclasses
 import pathlib
 from typing import Mapping, Sequence
 
+from music_match.matching import normalize as norm
 from music_match.sources.base import MetadataSource
 from music_match.sources.base import SourceError
 from music_match.sources.base import SourceQuery
@@ -139,11 +140,15 @@ class ProbeReport:
     return counts
 
 
-def query_for_file(path: pathlib.Path) -> SourceQuery:
+def query_for_file(path: pathlib.Path,
+                   duration_seconds: float | None = None) -> SourceQuery:
   """Builds a source query from a file's existing tags.
 
   Args:
     path: The audio file.
+    duration_seconds: The file's duration, if already known. Read from
+      the file when not given, since duration is the strongest signal for
+      telling a studio cut from a live version of the same song.
 
   Returns:
     The query.
@@ -151,7 +156,19 @@ def query_for_file(path: pathlib.Path) -> SourceQuery:
   Raises:
     TagError: If the file cannot be read.
   """
-  return SourceQuery.from_tags(tag_io.read_tags(path))
+  duration = duration_seconds
+  if duration is None:
+    duration = tag_io.read_duration(path)
+  tags = tag_io.read_tags(path)
+  query = SourceQuery.from_tags(tags, duration)
+  if query.is_usable():
+    return query
+  # No title tag at all. Rather than skip the track, fall back to the
+  # file name, which in a library like this almost always reads
+  # "Artist - Title" — and for WAV, whose tagging support is an
+  # afterthought, is usually the only thing there is to go on.
+  artist, title = norm.split_filename(path.stem)
+  return dataclasses.replace(query, title=title, artist=query.artist or artist)
 
 
 def probe_query(query: SourceQuery,

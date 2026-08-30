@@ -73,6 +73,9 @@ uv run music-match genre show FILE      # what the model hears in one file
 uv run music-match genre index          # detect genres across the library
 uv run music-match genre summary        # what the library is made of
 uv run music-match probe FILE...        # compare all four metadata sources
+uv run music-match match show FILE      # what one file would be matched to
+uv run music-match match run            # match the library, record proposals
+uv run music-match match summary        # how many matched / need review
 ```
 
 ### Finding duplicates
@@ -200,6 +203,55 @@ There is a `probe` skill in `.claude/skills/probe/` covering how to choose
 a sample and how to read the output — including the trap that coverage is
 not quality.
 
+### Matching
+
+`match` decides which release each track actually is, and how much to
+trust the answer. It records a **proposal** — nothing is written to any
+audio file, so a doubtful match can sit in the review queue harmlessly.
+
+```bash
+uv run music-match match show FILE   # one file, with the scoring shown
+uv run music-match match run         # the whole library, resumable
+uv run music-match match summary     # matched / review / no_match counts
+uv run music-match match ignore FILE --reason "self-made edit"
+```
+
+Each source is asked for several candidates rather than one, because
+taking each platform's top hit is only about half right — they rank for
+popularity, store relevance and text score, none of which is "the release
+this file came from". Candidates are then scored on:
+
+- **Duration**, the strongest signal. A live cut runs minutes longer than
+  the studio take; nothing in the text can tell you that.
+- **Title and artist similarity**, after normalising away case, accents,
+  featured artists and yt-dlp filename noise.
+- **Penalties** for release shapes that are usually the wrong answer —
+  soundtracks, greatest-hits, karaoke, live albums, remix EPs — unless the
+  track being matched is itself one of those.
+
+Where the sources **disagree**, the majority wins over configured
+precedence. This is the case scoring cannot solve: searching AC/DC's
+"Thunderstruck" returns both `The Razors Edge` and the `Iron Man 2`
+soundtrack with identical title, artist *and* duration. Nothing separates
+them except that other sources agree on one of them.
+
+**Confidence** blends how well candidates scored, how much the sources
+agreed, and how many answered. At or above `--auto-apply` (0.85) the match
+is trusted; below it goes to review; below `--review-floor` (0.45) it is
+discarded. Measured against tracks with known answers, every correct match
+scored 0.90 or better and a genuinely ambiguous one — a radio edit that
+four sources placed on four different releases — scored 0.81. That gap set
+the threshold, but the sample was small; expect to revisit it.
+
+A file carrying **no title tag at all** is searched for by its file name
+rather than skipped — nearly everything here is named `Artist - Title`,
+and for the WAV files that name is the only metadata they have.
+
+**What confidence does not measure:** whether the *release* is the one you
+would have picked. It measures whether this is the right recording and
+whether the sources agree. A track can be confidently matched to a
+compilation that legitimately contains it.
+
 Useful flags:
 
 - `config show --sources PATH --precedence PATH` — point at config files
@@ -226,6 +278,12 @@ Useful flags:
 - `probe --all-fields` — include fields no source answered.
 - `probe --no-cache` — bypass cached responses, for checking whether a
   source's data has actually changed.
+- `match run --source NAME`, `--limit N`, `--force`, `--dry-run` — as for
+  `scan`.
+- `match run --auto-apply F --review-floor F` — move the confidence
+  thresholds.
+- `match show --genre "Electronic"` — pick the precedence order by genre
+  without needing the track indexed.
 
 ## Development
 
