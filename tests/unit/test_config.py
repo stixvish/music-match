@@ -133,7 +133,10 @@ def test_load_sources_rejects_invalid_toml(tmp_path: pathlib.Path) -> None:
     ("R&B", "rnb"),
     ("Hip Hop", "hip_hop"),
     ("  Drum-n-Bass  ", "drum_n_bass"),
-    ("Drum & Bass", "drum_n_bass"),
+    ("Drum & Bass", "drum_bass"),
+    ("Funk / Soul", "funk_soul"),
+    ("Children's", "childrens"),
+    ("Folk, World, & Country", "folk_world_country"),
 ])
 def test_normalize_genre(raw: str, expected: str) -> None:
   """Detector labels reduce to precedence.toml keys."""

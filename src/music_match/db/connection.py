@@ -34,21 +34,32 @@ def connect(path: pathlib.Path = DEFAULT_DB_FILE) -> sqlite3.Connection:
 
 
 def initialize(connection: sqlite3.Connection) -> int:
-  """Creates any missing tables and indexes.
+  """Creates any missing tables and brings the schema up to date.
 
-  Safe to call on an existing database — every statement is
-  CREATE ... IF NOT EXISTS, so this is the same call for first-time setup
-  and for reopening.
+  Safe to call on an existing database, and the same call for first-time
+  setup and for reopening: the CREATE statements are all IF NOT EXISTS,
+  and migrations only run on a database that predates a column.
 
   Args:
     connection: An open connection, from `connect`.
 
   Returns:
     The schema version now recorded in the database.
+
+  Raises:
+    sqlite3.DatabaseError: If a migration fails, leaving the recorded
+      version unchanged so the next attempt retries it.
   """
+  starting = schema_version(connection)
   with connection:
     for statement in schema.SCHEMA_STATEMENTS:
       connection.execute(statement)
+    # Version 0 means the tables were just created, and they were created
+    # with every column already present — there is nothing to migrate.
+    if starting:
+      for version in range(starting, schema.SCHEMA_VERSION):
+        for statement in schema.MIGRATIONS.get(version, ()):
+          connection.execute(statement)
     connection.execute(f"PRAGMA user_version = {schema.SCHEMA_VERSION}")
   return schema.SCHEMA_VERSION
 

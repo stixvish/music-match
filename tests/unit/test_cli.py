@@ -16,6 +16,7 @@ from music_match.db import connection
 from music_match.db import queries
 from music_match.tagging import fields
 from music_match.tagging import fingerprint as fp
+from music_match.tagging import genre as genre_lib
 from music_match.tagging import tags as tag_io
 
 runner = testing.CliRunner()
@@ -352,3 +353,301 @@ def test_dedup_needs_a_scan_first(tmp_path: pathlib.Path) -> None:
        str(tmp_path / "state.db")])
   assert result.exit_code == 0
   assert "run `music-match scan` first" in result.stdout
+
+
+class FakeDetector:
+  """Stands in for GenreDetector so the CLI is testable without Essentia."""
+
+  def __init__(self, results: dict[str, str], top_n: int = 5) -> None:
+    """Records what to return for each file name.
+
+    Args:
+      results: File name to the label to predict. A name mapped to the
+        empty string produces no prediction at all.
+      top_n: Accepted for signature compatibility; unused.
+    """
+    self._results = results
+    self._top_n = top_n
+
+  def detect(self, path: pathlib.Path) -> genre_lib.GenreResult:
+    """Returns the configured result for a file.
+
+    Args:
+      path: The file being analysed.
+
+    Returns:
+      The configured prediction.
+
+    Raises:
+      GenreError: If the file was not configured, standing in for a file
+        the model cannot decode.
+    """
+    if path.name not in self._results:
+      raise genre_lib.GenreError(f"could not analyse {path}")
+    label = self._results[path.name]
+    if not label:
+      return genre_lib.GenreResult(predictions=())
+    return genre_lib.GenreResult(
+        predictions=(genre_lib.Prediction(label=label, confidence=0.9),))
+
+
+def fake_detector(monkeypatch: pytest.MonkeyPatch, results: dict[str,
+                                                                 str]) -> None:
+  """Replaces GenreDetector with a stub returning fixed predictions.
+
+  Args:
+    monkeypatch: pytest's patching fixture.
+    results: File name to the label it should predict.
+  """
+  monkeypatch.setattr(genre_lib,
+                      "GenreDetector",
+                      lambda models, top_n=5: FakeDetector(results, top_n))
+
+
+def test_genre_show_prints_predictions(tmp_path: pathlib.Path,
+                                       monkeypatch: pytest.MonkeyPatch) -> None:
+  """`genre show` lists predictions and the precedence key they map to."""
+  build_source_tree(tmp_path, ("a.m4a",))
+  fake_detector(monkeypatch, {"a.m4a": "Electronic---Deep House"})
+  result = runner.invoke(
+      main.app,
+      ["genre", "show", str(tmp_path / "yt-dlp" / "a.m4a")])
+  assert result.exit_code == 0
+  assert "Electronic---Deep House" in result.stdout
+  assert "precedence key: electronic" in result.stdout
+
+
+def test_genre_show_handles_no_prediction(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A file too short to analyse says so rather than showing nothing."""
+  build_source_tree(tmp_path, ("a.m4a",))
+  fake_detector(monkeypatch, {"a.m4a": ""})
+  result = runner.invoke(
+      main.app,
+      ["genre", "show", str(tmp_path / "yt-dlp" / "a.m4a")])
+  assert result.exit_code == 0
+  assert "too little audio" in result.stdout
+
+
+def test_genre_show_reports_an_unreadable_file(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A file the model cannot decode exits non-zero with a message."""
+  build_source_tree(tmp_path, ("a.m4a",))
+  fake_detector(monkeypatch, {})
+  result = runner.invoke(
+      main.app,
+      ["genre", "show", str(tmp_path / "yt-dlp" / "a.m4a")])
+  assert result.exit_code == 1
+
+
+def test_genre_index_records_labels(tmp_path: pathlib.Path,
+                                    monkeypatch: pytest.MonkeyPatch) -> None:
+  """`genre index` stores a detected genre for every file."""
+  config = build_source_tree(tmp_path, ("a.m4a", "b.m4a"))
+  fake_detector(monkeypatch, {
+      "a.m4a": "Electronic---Deep House",
+      "b.m4a": "Hip Hop---Trap"
+  })
+  db_path = tmp_path / "state.db"
+  result = runner.invoke(
+      main.app,
+      ["genre", "index", "--sources",
+       str(config), "--db",
+       str(db_path)])
+  assert result.exit_code == 0
+  assert "analysed 2, failed 0" in result.stdout
+  with connection.open_db(db_path) as conn:
+    counts = {
+        label: count for label, count, _ in queries.detected_genre_counts(conn)
+    }
+  assert counts == {"Electronic---Deep House": 1, "Hip Hop---Trap": 1}
+
+
+def test_genre_index_dry_run_writes_nothing(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """`genre index --dry-run` reports the work without recording it."""
+  config = build_source_tree(tmp_path, ("a.m4a",))
+  fake_detector(monkeypatch, {"a.m4a": "Rock---Indie Rock"})
+  db_path = tmp_path / "state.db"
+  result = runner.invoke(main.app, [
+      "genre", "index", "--sources",
+      str(config), "--db",
+      str(db_path), "--dry-run"
+  ])
+  assert result.exit_code == 0
+  assert "would analyse 1 files" in result.stdout
+  with connection.open_db(db_path) as conn:
+    assert queries.count_tracks(conn) == 0
+
+
+def test_genre_index_is_resumable(tmp_path: pathlib.Path,
+                                  monkeypatch: pytest.MonkeyPatch) -> None:
+  """A second run skips files that already have a genre."""
+  config = build_source_tree(tmp_path, ("a.m4a",))
+  fake_detector(monkeypatch, {"a.m4a": "Jazz---Bebop"})
+  args = [
+      "genre", "index", "--sources",
+      str(config), "--db",
+      str(tmp_path / "state.db")
+  ]
+  runner.invoke(main.app, args)
+  result = runner.invoke(main.app, args)
+  assert "1 already analysed, 0 to do" in result.stdout
+
+
+def test_genre_index_survives_a_bad_file(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """One undecodable file does not abort the run."""
+  config = build_source_tree(tmp_path, ("good.m4a", "bad.m4a"))
+  fake_detector(monkeypatch, {"good.m4a": "Pop---Synth-pop"})
+  result = runner.invoke(main.app, [
+      "genre", "index", "--sources",
+      str(config), "--db",
+      str(tmp_path / "state.db")
+  ])
+  assert result.exit_code == 0
+  assert "analysed 1, failed 1" in result.stdout
+
+
+def test_genre_index_does_not_clear_fingerprints(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The genre pass fills its own column without wiping the scan's.
+
+  Both passes upsert the same row, so a non-coalescing update here would
+  silently undo a full fingerprint scan.
+  """
+  config = build_source_tree(tmp_path, ("a.m4a",))
+  fake_fingerprints(monkeypatch, {"a.m4a": BASE_VALUES})
+  db_path = tmp_path / "state.db"
+  runner.invoke(main.app,
+                ["scan", "--sources",
+                 str(config), "--db",
+                 str(db_path)])
+  fake_detector(monkeypatch, {"a.m4a": "Electronic---Techno"})
+  runner.invoke(
+      main.app,
+      ["genre", "index", "--sources",
+       str(config), "--db",
+       str(db_path)])
+
+  with connection.open_db(db_path) as conn:
+    row = conn.execute(
+        "SELECT fingerprint, detected_genre FROM tracks").fetchone()
+  assert row["fingerprint"] is not None
+  assert row["detected_genre"] == "Electronic---Techno"
+
+
+def test_genre_summary_reports_counts(tmp_path: pathlib.Path,
+                                      monkeypatch: pytest.MonkeyPatch) -> None:
+  """`genre summary` groups what the index recorded."""
+  config = build_source_tree(tmp_path, ("a.m4a", "b.m4a"))
+  fake_detector(monkeypatch, {
+      "a.m4a": "Electronic---Techno",
+      "b.m4a": "Electronic---Techno"
+  })
+  db_path = tmp_path / "state.db"
+  runner.invoke(
+      main.app,
+      ["genre", "index", "--sources",
+       str(config), "--db",
+       str(db_path)])
+  result = runner.invoke(main.app, ["genre", "summary", "--db", str(db_path)])
+  assert "2 tracks across 1 labels" in result.stdout
+  assert "Electronic---Techno" in result.stdout
+
+
+def test_genre_summary_without_an_index(tmp_path: pathlib.Path) -> None:
+  """With nothing recorded, the summary says what to run."""
+  result = runner.invoke(
+      main.app, ["genre", "summary", "--db",
+                 str(tmp_path / "state.db")])
+  assert "run `music-match genre index` first" in result.stdout
+
+
+def test_fetch_models_is_idempotent(tmp_path: pathlib.Path) -> None:
+  """With every model already present, nothing is downloaded."""
+  for name in genre_lib.MODEL_URLS:
+    (tmp_path / name).write_bytes(b"x")
+  result = runner.invoke(main.app,
+                         ["genre", "fetch-models", "--models",
+                          str(tmp_path)])
+  assert result.exit_code == 0
+  assert "already present" in result.stdout
+
+
+def test_fetch_models_dry_run_downloads_nothing(tmp_path: pathlib.Path) -> None:
+  """`fetch-models --dry-run` lists the files without fetching them."""
+  models = tmp_path / "models"
+  result = runner.invoke(
+      main.app, ["genre", "fetch-models", "--models",
+                 str(models), "--dry-run"])
+  assert result.exit_code == 0
+  assert "would download 3 files" in result.stdout
+  assert not models.exists()
+
+
+def test_genre_index_stores_confidence(tmp_path: pathlib.Path,
+                                       monkeypatch: pytest.MonkeyPatch) -> None:
+  """The label is stored with the score behind it, not on its own.
+
+  A bare label is not enough to act on: measured against known tracks the
+  model is right about a fifth of the time below 0.15 confidence.
+  """
+  config = build_source_tree(tmp_path, ("a.m4a",))
+  fake_detector(monkeypatch, {"a.m4a": "Electronic---Techno"})
+  db_path = tmp_path / "state.db"
+  runner.invoke(
+      main.app,
+      ["genre", "index", "--sources",
+       str(config), "--db",
+       str(db_path)])
+  with connection.open_db(db_path) as conn:
+    row = conn.execute(
+        "SELECT detected_genre, genre_confidence FROM tracks").fetchone()
+  assert row["detected_genre"] == "Electronic---Techno"
+  assert row["genre_confidence"] == pytest.approx(0.9)
+
+
+def test_genre_summary_can_filter_by_confidence(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """`--min-confidence` hides labels the model barely backed."""
+  config = build_source_tree(tmp_path, ("a.m4a",))
+  fake_detector(monkeypatch, {"a.m4a": "Electronic---Techno"})
+  db_path = tmp_path / "state.db"
+  runner.invoke(
+      main.app,
+      ["genre", "index", "--sources",
+       str(config), "--db",
+       str(db_path)])
+
+  kept = runner.invoke(
+      main.app,
+      ["genre", "summary", "--db",
+       str(db_path), "--min-confidence", "0.5"])
+  dropped = runner.invoke(
+      main.app,
+      ["genre", "summary", "--db",
+       str(db_path), "--min-confidence", "0.95"])
+  assert "Electronic---Techno" in kept.stdout
+  assert "no genres detected yet" in dropped.stdout
+
+
+def test_genre_index_survives_a_file_with_no_prediction(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A track too short to analyse is skipped, not fatal.
+
+  Files shorter than one analysis window embed to nothing. Letting that
+  end the run would abandon a whole library pass at the first jingle.
+  """
+  config = build_source_tree(tmp_path, ("good.m4a", "tiny.m4a"))
+  fake_detector(monkeypatch, {
+      "good.m4a": "Electronic---Techno",
+      "tiny.m4a": ""
+  })
+  result = runner.invoke(main.app, [
+      "genre", "index", "--sources",
+      str(config), "--db",
+      str(tmp_path / "state.db")
+  ])
+  assert result.exit_code == 0
+  assert "analysed 1, failed 1" in result.stdout

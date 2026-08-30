@@ -10,6 +10,7 @@ import shutil
 import sqlite3
 from typing import Annotated, Iterable
 
+import requests
 import typer
 
 from music_match import __version__
@@ -20,6 +21,7 @@ from music_match.db import queries
 from music_match.db import schema
 from music_match.tagging import dedup as dedup_lib
 from music_match.tagging import fingerprint as fp
+from music_match.tagging import genre as genre_lib
 from music_match.tagging import quality as quality_lib
 from music_match.tagging import tags as tag_io
 
@@ -32,9 +34,11 @@ config_app = typer.Typer(help="Inspect resolved configuration.",
                          no_args_is_help=True)
 db_app = typer.Typer(help="Manage local SQLite state.", no_args_is_help=True)
 tags_app = typer.Typer(help="Read file tags.", no_args_is_help=True)
+genre_app = typer.Typer(help="Local genre detection.", no_args_is_help=True)
 app.add_typer(config_app, name="config")
 app.add_typer(db_app, name="db")
 app.add_typer(tags_app, name="tags")
+app.add_typer(genre_app, name="genre")
 
 SourcesOption = Annotated[
     pathlib.Path,
@@ -432,3 +436,251 @@ def _apply_group_moves(conn: sqlite3.Connection,
       conn.commit()
       moved += 1
   return moved
+
+
+ModelsOption = Annotated[
+    pathlib.Path,
+    typer.Option("--models", help="Directory holding the Essentia models.")]
+
+
+@genre_app.command("fetch-models")
+def genre_fetch_models(
+    models: ModelsOption = genre_lib.DEFAULT_MODELS_DIR,
+    dry_run: DryRunOption = False,
+) -> None:
+  """Downloads the discogs-effnet model files.
+
+  About 20MB in total, and gitignored. Files already present are left
+  alone, so this is safe to re-run.
+
+  Args:
+    models: Where to put the model files.
+    dry_run: Report what would be downloaded without writing.
+  """
+  missing = genre_lib.missing_models(models)
+  if not missing:
+    typer.echo(f"all model files already present in {models}")
+    return
+  if dry_run:
+    typer.echo(f"dry run: would download {len(missing)} files to {models}")
+    for name in missing:
+      typer.echo(f"  {name}")
+    return
+
+  models.mkdir(parents=True, exist_ok=True)
+  for name in missing:
+    typer.echo(f"downloading {name}")
+    try:
+      _download(genre_lib.MODEL_URLS[name], models / name)
+    except requests.RequestException as err:
+      typer.echo(f"error: could not download {name}: {err}", err=True)
+      raise typer.Exit(code=1) from err
+  typer.echo(f"models ready in {models}")
+
+
+def _download(url: str, destination: pathlib.Path) -> None:
+  """Streams a file to disk, writing to a temporary name first.
+
+  Writing to a `.part` file and renaming on success means an interrupted
+  download never leaves something that looks like a usable model.
+
+  Args:
+    url: What to download.
+    destination: Where it should end up.
+
+  Raises:
+    requests.RequestException: If the download fails.
+  """
+  partial = destination.with_suffix(destination.suffix + ".part")
+  with requests.get(url, stream=True, timeout=60) as response:
+    response.raise_for_status()
+    with partial.open("wb") as handle:
+      for chunk in response.iter_content(chunk_size=1 << 16):
+        handle.write(chunk)
+  partial.replace(destination)
+
+
+@genre_app.command("show")
+def genre_show(
+    file: Annotated[pathlib.Path,
+                    typer.Argument(help="Audio file to analyse.")],
+    models: ModelsOption = genre_lib.DEFAULT_MODELS_DIR,
+    top: Annotated[int,
+                   typer.Option("--top", help="How many predictions to show."
+                               )] = genre_lib.DEFAULT_TOP_N,
+) -> None:
+  """Prints what the model makes of one file.
+
+  Args:
+    file: The audio file to analyse.
+    models: Directory holding the Essentia models.
+    top: How many predictions to show.
+  """
+  detector = _detector_or_exit(models, top)
+  try:
+    result = detector.detect(file)
+  except genre_lib.GenreError as err:
+    typer.echo(f"error: {err}", err=True)
+    raise typer.Exit(code=1) from err
+
+  if not result.predictions:
+    typer.echo("no prediction: too little audio to analyse")
+    return
+  for prediction in result.predictions:
+    typer.echo(f"  {prediction.confidence:.3f}  {prediction.label}")
+  key = loader.normalize_genre(result.label or "")
+  typer.echo(f"\nprecedence key: {key}")
+
+
+@genre_app.command("index")
+def genre_index(
+    sources: SourcesOption = loader.DEFAULT_SOURCES_FILE,
+    db: DbOption = connection.DEFAULT_DB_FILE,
+    models: ModelsOption = genre_lib.DEFAULT_MODELS_DIR,
+    source: SourceNameOption = None,
+    limit: Annotated[
+        int,
+        typer.Option("--limit",
+                     help="Stop after this many files. 0 means no limit.")] = 0,
+    force: Annotated[
+        bool,
+        typer.Option("--force", help="Re-detect files already done.")] = False,
+    dry_run: DryRunOption = False,
+) -> None:
+  """Detects the genre of every file and records it.
+
+  Resumable in the same way as `scan`: files already carrying a detected
+  genre are skipped unless --force is given.
+
+  Args:
+    sources: Path to sources.toml.
+    db: Path to the SQLite database.
+    models: Directory holding the Essentia models.
+    source: Limit to one configured source folder.
+    limit: Stop after this many files, or 0 for no limit.
+    force: Re-detect files that already have a genre.
+    dry_run: Report what would be analysed without writing.
+  """
+  sources_config = _load_sources_or_exit(sources)
+  try:
+    files = list(library.walk(sources_config, source))
+  except KeyError:
+    typer.echo(f"error: no source folder named '{source}' in {sources}",
+               err=True)
+    raise typer.Exit(code=1) from None
+  except FileNotFoundError as err:
+    typer.echo(f"error: {err}", err=True)
+    raise typer.Exit(code=1) from err
+
+  with connection.open_db(db) as conn:
+    done = set() if force else queries.genre_tagged_paths(conn)
+    pending = [item for item in files if str(item.path) not in done]
+    already = len(files) - len(pending)
+    if limit:
+      pending = pending[:limit]
+    typer.echo(f"{len(files)} audio files, {already} already analysed, "
+               f"{len(pending)} to do")
+    if dry_run:
+      typer.echo(f"dry run: would analyse {len(pending)} files")
+      return
+    if not pending:
+      return
+
+    detector = _detector_or_exit(models, genre_lib.DEFAULT_TOP_N)
+    failures = _detect_all(conn, detector, pending)
+
+  typer.echo(f"analysed {len(pending) - failures}, failed {failures}")
+
+
+def _detect_all(conn: sqlite3.Connection, detector: genre_lib.GenreDetector,
+                pending: list[library.LibraryFile]) -> int:
+  """Detects genres and records each result as it completes.
+
+  Args:
+    conn: An open database connection.
+    detector: The loaded detector.
+    pending: The files to analyse.
+
+  Returns:
+    How many files failed.
+  """
+  failures = 0
+  for position, item in enumerate(pending, start=1):
+    report = position % 25 == 0 or position == len(pending)
+    try:
+      result = detector.detect(item.path)
+    except genre_lib.GenreError as err:
+      failures += 1
+      typer.echo(f"  skipped: {err}", err=True)
+      continue
+    top = result.top
+    if top is None:
+      failures += 1
+      typer.echo(f"  skipped: no prediction for {item.path}", err=True)
+      continue
+    queries.upsert_track(conn,
+                         path=item.path,
+                         source_name=item.source.name,
+                         detected_genre=top.label,
+                         genre_confidence=top.confidence)
+    conn.commit()
+    if report:
+      typer.echo(f"  {position}/{len(pending)}")
+  return failures
+
+
+@genre_app.command("summary")
+def genre_summary(
+    db: DbOption = connection.DEFAULT_DB_FILE,
+    top: Annotated[int,
+                   typer.Option("--top", help="How many genres to list.")] = 20,
+    min_confidence: Annotated[
+        float,
+        typer.Option("--min-confidence",
+                     help="Ignore labels the model backed less strongly "
+                     "than this.")] = 0.0,
+) -> None:
+  """Summarises the detected genres already recorded.
+
+  Args:
+    db: Path to the SQLite database.
+    top: How many genres to list.
+    min_confidence: Ignore labels backed less strongly than this.
+  """
+  with connection.open_db(db) as conn:
+    counts = queries.detected_genre_counts(conn, min_confidence)
+  if not counts:
+    typer.echo("no genres detected yet; run `music-match genre index` first")
+    return
+  total = sum(count for _, count, _ in counts)
+  typer.echo(f"{total} tracks across {len(counts)} labels")
+  weak = sum(count for _, count, mean in counts
+             if mean < genre_lib.DEFAULT_CONFIDENCE_FLOOR)
+  if weak and not min_confidence:
+    typer.echo(f"{weak} of them average below "
+               f"{genre_lib.DEFAULT_CONFIDENCE_FLOOR} confidence, where the"
+               " model is mostly guessing")
+  typer.echo("")
+  for label, count, mean in counts[:top]:
+    typer.echo(f"  {count:5d}  {mean:.2f}  {label}")
+
+
+def _detector_or_exit(models: pathlib.Path,
+                      top_n: int) -> genre_lib.GenreDetector:
+  """Builds a detector, exiting with a clear message if it cannot.
+
+  Args:
+    models: Directory holding the Essentia models.
+    top_n: How many predictions to keep.
+
+  Returns:
+    The loaded detector.
+
+  Raises:
+    typer.Exit: If Essentia or the model files are missing.
+  """
+  try:
+    return genre_lib.GenreDetector(models, top_n=top_n)
+  except genre_lib.GenreError as err:
+    typer.echo(f"error: {err}", err=True)
+    raise typer.Exit(code=1) from err
