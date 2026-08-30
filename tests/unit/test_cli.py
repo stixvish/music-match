@@ -1672,3 +1672,151 @@ def test_reindex_does_not_refingerprint_by_default(
   runner.invoke(main.app, args)
   second = runner.invoke(main.app, args)
   assert "fingerprinted: 0" in second.stdout
+
+
+def tagged_library(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch) -> tuple[pathlib.Path, pathlib.Path]:
+  """Builds a scanned library of two fully-tagged files.
+
+  Args:
+    tmp_path: The temporary directory.
+    monkeypatch: pytest's patching fixture.
+
+  Returns:
+    The sources.toml path and the database path.
+  """
+  config, db_path = intake_workspace(tmp_path)
+  first = conftest.write_m4a(tmp_path / "yt-dlp" / "a.m4a")
+  tag_io.write_tags(
+      first,
+      fields.TrackTags(title="Strobe",
+                       artist="deadmau5",
+                       album="FLOABN",
+                       track_number=9))
+  second = conftest.write_m4a(tmp_path / "yt-dlp" / "b.m4a")
+  tag_io.write_tags(second, fields.TrackTags(title="Untagged"))
+  fake_fingerprints(monkeypatch, {"a.m4a": BASE_VALUES, "b.m4a": OTHER_VALUES})
+  runner.invoke(main.app,
+                ["scan", "--sources",
+                 str(config), "--db",
+                 str(db_path)])
+  return (config, db_path)
+
+
+def test_restructure_reports_without_moving(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Without --apply nothing moves."""
+  config, db_path = tagged_library(tmp_path, monkeypatch)
+  result = runner.invoke(
+      main.app,
+      ["restructure", "run", "--sources",
+       str(config), "--db",
+       str(db_path)])
+  assert "reported only" in result.stdout
+  assert (tmp_path / "yt-dlp" / "a.m4a").exists()
+
+
+def test_restructure_moves_and_updates_the_index(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The file lands in Artist/Album and the database follows it."""
+  config, db_path = tagged_library(tmp_path, monkeypatch)
+  runner.invoke(main.app, [
+      "restructure", "run", "--sources",
+      str(config), "--db",
+      str(db_path), "--manifests",
+      str(tmp_path / "manifests"), "--apply"
+  ])
+  moved = tmp_path / "yt-dlp" / "deadmau5" / "FLOABN" / "09 Strobe.m4a"
+  assert moved.exists()
+  with connection.open_db(db_path) as conn:
+    paths = {row["path"] for row in conn.execute("SELECT path FROM tracks")}
+  assert str(moved) in paths
+
+
+def test_restructure_leaves_untaggable_files_alone(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Filing a file with no album under "Unknown" would bury it."""
+  config, db_path = tagged_library(tmp_path, monkeypatch)
+  runner.invoke(main.app, [
+      "restructure", "run", "--sources",
+      str(config), "--db",
+      str(db_path), "--manifests",
+      str(tmp_path / "manifests"), "--apply"
+  ])
+  assert (tmp_path / "yt-dlp" / "b.m4a").exists()
+
+
+def test_restructure_is_idempotent(tmp_path: pathlib.Path,
+                                   monkeypatch: pytest.MonkeyPatch) -> None:
+  """A second pass finds everything already in place."""
+  config, db_path = tagged_library(tmp_path, monkeypatch)
+  args = [
+      "restructure", "run", "--sources",
+      str(config), "--db",
+      str(db_path), "--manifests",
+      str(tmp_path / "manifests"), "--apply"
+  ]
+  runner.invoke(main.app, args)
+  second = runner.invoke(main.app, args)
+  assert "nothing moved" in second.stdout
+
+
+def test_restructure_undo_puts_files_back(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Moving on wrong metadata is the risk; this is the way back."""
+  config, db_path = tagged_library(tmp_path, monkeypatch)
+  manifests = tmp_path / "manifests"
+  runner.invoke(main.app, [
+      "restructure", "run", "--sources",
+      str(config), "--db",
+      str(db_path), "--manifests",
+      str(manifests), "--apply"
+  ])
+  manifest = next(manifests.glob("*.json"))
+  result = runner.invoke(main.app, [
+      "restructure", "undo",
+      str(manifest), "--sources",
+      str(config), "--db",
+      str(db_path)
+  ])
+  assert result.exit_code == 0
+  assert (tmp_path / "yt-dlp" / "a.m4a").exists()
+  assert not (tmp_path / "yt-dlp" / "deadmau5").exists()
+
+
+def test_restructure_undo_dry_run_moves_nothing(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The reversal can be inspected before it happens."""
+  config, db_path = tagged_library(tmp_path, monkeypatch)
+  manifests = tmp_path / "manifests"
+  runner.invoke(main.app, [
+      "restructure", "run", "--sources",
+      str(config), "--db",
+      str(db_path), "--manifests",
+      str(manifests), "--apply"
+  ])
+  manifest = next(manifests.glob("*.json"))
+  result = runner.invoke(main.app, [
+      "restructure", "undo",
+      str(manifest), "--sources",
+      str(config), "--db",
+      str(db_path), "--dry-run"
+  ])
+  assert "would put" in result.stdout
+  assert not (tmp_path / "yt-dlp" / "a.m4a").exists()
+
+
+def test_restructure_undo_refuses_a_bad_manifest(
+    tmp_path: pathlib.Path) -> None:
+  """Reversing moves from a file of unknown shape would be reckless."""
+  config, db_path = intake_workspace(tmp_path)
+  bad = tmp_path / "bad.json"
+  bad.write_text("not json", encoding="utf-8")
+  result = runner.invoke(main.app, [
+      "restructure", "undo",
+      str(bad), "--sources",
+      str(config), "--db",
+      str(db_path)
+  ])
+  assert result.exit_code == 1

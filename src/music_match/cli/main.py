@@ -18,6 +18,7 @@ from music_match import __version__
 from music_match import library
 from music_match import intake as intake_lib
 from music_match import probe as probe_lib
+from music_match import restructure as restructure_lib
 from music_match.matching import matcher as match_lib
 from music_match.config import env
 from music_match.config import loader
@@ -47,6 +48,9 @@ config_app = typer.Typer(help="Inspect resolved configuration.",
 db_app = typer.Typer(help="Manage local SQLite state.", no_args_is_help=True)
 tags_app = typer.Typer(help="Read file tags.", no_args_is_help=True)
 genre_app = typer.Typer(help="Local genre detection.", no_args_is_help=True)
+restructure_app = typer.Typer(
+    help="Reorganise source folders into Artist/Album/Track.",
+    no_args_is_help=True)
 rips_app = typer.Typer(help="Find and quarantine video rips.",
                        no_args_is_help=True)
 match_app = typer.Typer(help="Match tracks against metadata sources.",
@@ -57,6 +61,7 @@ app.add_typer(tags_app, name="tags")
 app.add_typer(genre_app, name="genre")
 app.add_typer(match_app, name="match")
 app.add_typer(rips_app, name="video-rips")
+app.add_typer(restructure_app, name="restructure")
 
 SourcesOption = Annotated[
     pathlib.Path,
@@ -2009,3 +2014,223 @@ def _rebuild_archive_entry(conn: sqlite3.Connection, tags: tag_fields.TrackTags,
                            extractor=DEFAULT_ARCHIVE_EXTRACTOR)
   intake_lib.record_download(conn, entry, track_id)
   return True
+
+
+ManifestOption = Annotated[
+    pathlib.Path,
+    typer.Option("--manifests", help="Directory holding restructure manifests."
+                )]
+
+
+@restructure_app.command("run")
+def restructure_run(
+    sources: SourcesOption = loader.DEFAULT_SOURCES_FILE,
+    db: DbOption = connection.DEFAULT_DB_FILE,
+    manifests: ManifestOption = restructure_lib.DEFAULT_MANIFEST_DIR,
+    source: SourceNameOption = None,
+    apply_moves: Annotated[
+        bool,
+        typer.Option("--apply",
+                     help="Actually move the files. Without this, the pass "
+                     "only reports.")] = False,
+    limit: Annotated[
+        int,
+        typer.Option("--limit",
+                     help="Stop after this many files. 0 means no limit.")] = 0,
+) -> None:
+  """Reorganises each source folder into Artist/Album/Track.
+
+  Run this only once you trust the tags. Each source folder is
+  reorganised within itself — nothing moves between folders and nothing
+  leaves them. Reports without touching anything unless --apply is given.
+
+  Args:
+    sources: Path to sources.toml.
+    db: Path to the SQLite database.
+    manifests: Where to write the record of what was moved.
+    source: Limit to one configured source folder.
+    apply_moves: Perform the moves rather than only reporting them.
+    limit: Stop after this many files, or 0 for no limit.
+  """
+  sources_config = _load_sources_or_exit(sources)
+  try:
+    files = list(library.walk(sources_config, source))
+  except KeyError:
+    typer.echo(f"error: no source folder named '{source}'", err=True)
+    raise typer.Exit(code=1) from None
+  except FileNotFoundError as err:
+    typer.echo(f"error: {err}", err=True)
+    raise typer.Exit(code=1) from err
+  if limit:
+    files = files[:limit]
+
+  planned = restructure_lib.plan(_with_tags(files))
+  movable = [
+      item for item in planned if item.is_placeable() and not item.is_noop()
+  ]
+  settled = [item for item in planned if item.is_noop()]
+  skipped = [item for item in planned if not item.is_placeable()]
+
+  typer.echo(f"{len(planned)} file(s): {len(movable)} to move,"
+             f" {len(settled)} already in place, {len(skipped)} unplaceable")
+  for item in skipped[:10]:
+    typer.echo(f"  leaving {item.source.name}: {item.reason}")
+  if len(skipped) > 10:
+    typer.echo(f"  ... and {len(skipped) - 10} more left where they are")
+
+  if not apply_moves:
+    for item in movable[:20]:
+      assert item.destination is not None
+      typer.echo(f"  {item.source.name}"
+                 f"  ->  {_relative(item.destination, sources_config)}")
+    if len(movable) > 20:
+      typer.echo(f"  ... and {len(movable) - 20} more")
+    typer.echo("reported only. Re-run with --apply to move them.")
+    return
+
+  with connection.open_db(db) as conn:
+    performed = _perform_moves(conn, movable, sources_config)
+  if performed:
+    manifest = restructure_lib.write_manifest(performed, manifests)
+    typer.echo(f"moved {len(performed)} file(s)")
+    typer.echo(f"undo with: music-match restructure undo {manifest}")
+  else:
+    typer.echo("nothing moved")
+
+
+def _with_tags(
+    files: list[library.LibraryFile]
+) -> list[tuple[library.LibraryFile, tag_fields.TrackTags]]:
+  """Reads each file's tags, skipping ones that cannot be read.
+
+  Args:
+    files: The library files.
+
+  Returns:
+    Each file with its tags.
+  """
+  paired = []
+  for item in files:
+    try:
+      paired.append((item, tag_io.read_tags(item.path)))
+    except tag_io.TagError as err:
+      typer.echo(f"  skipped {item.path.name}: {err}", err=True)
+  return paired
+
+
+def _perform_moves(
+    conn: sqlite3.Connection, movable: list[restructure_lib.Move],
+    sources_config: loader.SourcesConfig
+) -> list[tuple[pathlib.Path, pathlib.Path]]:
+  """Moves files and records each one in the database.
+
+  Args:
+    conn: An open database connection.
+    movable: The moves to perform.
+    sources_config: The loaded source configuration, used to confirm
+      every destination stays inside a source folder.
+
+  Returns:
+    The (from, to) pairs actually performed.
+  """
+  performed = []
+  for item in movable:
+    assert item.destination is not None
+    folder = sources_config.folder_for_path(item.source)
+    if folder is None or not _is_within(item.destination, folder.path):
+      typer.echo(
+          f"  refusing to move {item.source.name} outside its"
+          " source folder",
+          err=True)
+      continue
+    try:
+      destination = restructure_lib.free_destination(item.destination)
+      destination.parent.mkdir(parents=True, exist_ok=True)
+      shutil.move(str(item.source), str(destination))
+    except (OSError, FileExistsError) as err:
+      typer.echo(f"  could not move {item.source.name}: {err}", err=True)
+      continue
+    track_id = queries.track_id_for_path(conn, item.source)
+    if track_id is not None:
+      queries.move_track(conn, track_id, destination)
+      conn.commit()
+    restructure_lib.prune_empty(item.source.parent, folder.path)
+    performed.append((item.source, destination))
+  return performed
+
+
+@restructure_app.command("undo")
+def restructure_undo(
+    manifest: Annotated[pathlib.Path,
+                        typer.Argument(help="Manifest of moves to reverse.")],
+    db: DbOption = connection.DEFAULT_DB_FILE,
+    sources: SourcesOption = loader.DEFAULT_SOURCES_FILE,
+    dry_run: DryRunOption = False,
+) -> None:
+  """Puts files back where a restructure pass found them.
+
+  Args:
+    manifest: The manifest written by that pass.
+    db: Path to the SQLite database.
+    sources: Path to sources.toml.
+    dry_run: Report what would be reversed without moving anything.
+  """
+  sources_config = _load_sources_or_exit(sources)
+  try:
+    pairs = restructure_lib.read_manifest(manifest)
+  except ValueError as err:
+    typer.echo(f"error: {err}", err=True)
+    raise typer.Exit(code=1) from err
+
+  typer.echo(f"{len(pairs)} move(s) recorded")
+  if dry_run:
+    typer.echo(f"dry run: would put {len(pairs)} file(s) back")
+    return
+
+  restored = 0
+  with connection.open_db(db) as conn:
+    # Reversed, so a file moved twice lands back at its original name.
+    for original, moved in reversed(pairs):
+      if not moved.exists():
+        typer.echo(f"  missing {moved.name}, skipping", err=True)
+        continue
+      folder = sources_config.folder_for_path(original)
+      if folder is None or not _is_within(original, folder.path):
+        typer.echo(
+            f"  refusing to restore {moved.name} outside a source"
+            " folder",
+            err=True)
+        continue
+      try:
+        original.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(moved), str(restructure_lib.free_destination(original)))
+      except OSError as err:
+        typer.echo(f"  could not restore {moved.name}: {err}", err=True)
+        continue
+      track_id = queries.track_id_for_path(conn, moved)
+      if track_id is not None:
+        queries.move_track(conn, track_id, original)
+        conn.commit()
+      restructure_lib.prune_empty(moved.parent, folder.path)
+      restored += 1
+  typer.echo(f"restored {restored} file(s)")
+
+
+def _relative(path: pathlib.Path, sources_config: loader.SourcesConfig) -> str:
+  """Renders a destination relative to its source folder, for display.
+
+  Args:
+    path: The destination path.
+    sources_config: The loaded source configuration.
+
+  Returns:
+    The path below its source folder, or the full path if it is not
+    under one.
+  """
+  folder = sources_config.folder_for_path(path)
+  if folder is not None:
+    try:
+      return str(path.relative_to(folder.path))
+    except ValueError:
+      pass
+  return str(path)
