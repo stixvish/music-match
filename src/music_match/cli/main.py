@@ -15,6 +15,8 @@ import typer
 
 from music_match import __version__
 from music_match import library
+from music_match import probe as probe_lib
+from music_match.config import env
 from music_match.config import loader
 from music_match.db import connection
 from music_match.db import queries
@@ -23,6 +25,9 @@ from music_match.tagging import dedup as dedup_lib
 from music_match.tagging import fingerprint as fp
 from music_match.tagging import genre as genre_lib
 from music_match.tagging import quality as quality_lib
+from music_match.sources import SOURCE_TYPES
+from music_match.sources import base as source_base
+from music_match.sources import build_all
 from music_match.tagging import tags as tag_io
 
 app = typer.Typer(
@@ -684,3 +689,199 @@ def _detector_or_exit(models: pathlib.Path,
   except genre_lib.GenreError as err:
     typer.echo(f"error: {err}", err=True)
     raise typer.Exit(code=1) from err
+
+
+@app.command("probe")
+def probe(
+    files: Annotated[list[pathlib.Path] | None,
+                     typer.Argument(
+                         help="Audio files to probe. Their tags become the "
+                         "search query.")] = None,
+    artist: Annotated[
+        str | None,
+        typer.Option("--artist", help="Probe this artist instead of a "
+                     "file.")] = None,
+    title: Annotated[
+        str | None,
+        typer.Option("--title", help="Probe this title instead of a "
+                     "file.")] = None,
+    only: Annotated[str | None,
+                    typer.Option("--only",
+                                 help="Comma-separated sources to ask, "
+                                 "instead of all of them.")] = None,
+    show_all: Annotated[
+        bool,
+        typer.Option("--all-fields", help="Include fields no source answered."
+                    )] = False,
+    no_cache: Annotated[
+        bool,
+        typer.Option("--no-cache", help="Ignore cached responses and re-query."
+                    )] = False,
+) -> None:
+  """Compares what every metadata source says about the same tracks.
+
+  This is how precedence.toml gets tuned: run a sample of real tracks
+  through every source and read the per-field comparison and the coverage
+  summary, rather than guessing which source is best at what.
+
+  Args:
+    files: Audio files whose tags become the search queries.
+    artist: Probe this artist rather than a file.
+    title: Probe this title rather than a file.
+    only: Restrict to these sources.
+    show_all: Include fields no source answered.
+    no_cache: Ignore cached responses.
+  """
+  env.load_env()
+  names = _requested_sources(only)
+  probe_sources = build_all(names)
+  if no_cache:
+    _disable_caches(probe_sources)
+
+  pending = _probe_queries(files, artist, title)
+  if not pending:
+    typer.echo("nothing to probe: give audio files, or --artist/--title",
+               err=True)
+    raise typer.Exit(code=1)
+
+  probes = []
+  for path, query in pending:
+    typer.echo(f"probing {path.name if path else query.as_text()} ...")
+    probes.append(probe_lib.probe_query(query, probe_sources, path))
+  report = probe_lib.ProbeReport(probes=tuple(probes), source_names=names)
+
+  for entry in report.probes:
+    _render_probe(entry, names, show_all)
+  _render_coverage(report)
+
+
+def _requested_sources(only: str | None) -> tuple[str, ...]:
+  """Resolves which sources to ask.
+
+  Args:
+    only: Comma-separated names, or None for all registered sources.
+
+  Returns:
+    The source names, in registry order.
+
+  Raises:
+    typer.Exit: If a named source is not registered.
+  """
+  if not only:
+    return tuple(SOURCE_TYPES)
+  wanted = tuple(name.strip() for name in only.split(",") if name.strip())
+  unknown = [name for name in wanted if name not in SOURCE_TYPES]
+  if unknown:
+    typer.echo(
+        f"error: unknown source(s): {_joined(unknown)}."
+        f" Known: {_joined(SOURCE_TYPES)}",
+        err=True)
+    raise typer.Exit(code=1)
+  return wanted
+
+
+def _disable_caches(probe_sources: list[source_base.MetadataSource]) -> None:
+  """Turns off response caching for a set of sources.
+
+  Args:
+    probe_sources: The sources to modify in place.
+  """
+  for source in probe_sources:
+    client = getattr(source, "_client", None)
+    if client is not None:
+      client.cache = None
+
+
+def _probe_queries(
+    files: list[pathlib.Path] | None, artist: str | None, title: str | None
+) -> list[tuple[pathlib.Path | None, source_base.SourceQuery]]:
+  """Builds the queries to probe, from files or from explicit terms.
+
+  Args:
+    files: Audio files whose tags become queries.
+    artist: An explicit artist.
+    title: An explicit title.
+
+  Returns:
+    (path, query) pairs. The path is None for explicit terms.
+  """
+  probe_queries: list[tuple[pathlib.Path | None, source_base.SourceQuery]] = []
+  if title or artist:
+    probe_queries.append(
+        (None, source_base.SourceQuery(title=title, artist=artist)))
+  for path in files or []:
+    try:
+      query = probe_lib.query_for_file(path)
+    except tag_io.TagError as err:
+      typer.echo(f"  skipped {path}: {err}", err=True)
+      continue
+    if not query.is_usable():
+      typer.echo(f"  skipped {path}: no title tag to search on", err=True)
+      continue
+    probe_queries.append((path, query))
+  return probe_queries
+
+
+def _render_probe(entry: probe_lib.TrackProbe, names: tuple[str, ...],
+                  show_all: bool) -> None:
+  """Prints one track's per-field comparison.
+
+  Args:
+    entry: The probed track.
+    names: The sources asked, in display order.
+    show_all: Whether to include fields no source answered.
+  """
+  typer.echo(f"\n=== {entry.label()} ===")
+  if entry.query.artist or entry.query.title:
+    typer.echo(f"    query: {entry.query.as_text()}")
+  for source, message in entry.errors.items():
+    typer.echo(f"    {source}: {message}")
+
+  width = max(len(name) for name in names)
+  for field in probe_lib.COMPARED_FIELDS:
+    values = {source: entry.value(source, field) for source in names}
+    if not show_all and not any(values.values()):
+      continue
+    typer.echo(f"  {field}")
+    for source in names:
+      shown = values[source] if values[source] is not None else "-"
+      typer.echo(f"    {source.ljust(width)}  {shown}")
+
+  extras = {
+      source: dict(result.extra)
+      for source, result in entry.results.items()
+      if result is not None and result.extra
+  }
+  for source, extra in extras.items():
+    detail = "  ".join(f"{key}={value}" for key, value in extra.items())
+    typer.echo(f"  extra ({source}): {detail}")
+
+
+def _render_coverage(report: probe_lib.ProbeReport) -> None:
+  """Prints the aggregate coverage table.
+
+  Args:
+    report: The finished probe report.
+  """
+  total = len(report.probes)
+  names = report.source_names
+  typer.echo(f"\n=== coverage across {total} track(s) ===")
+  header = "  ".join(name.center(11) for name in names)
+  field_column = "field".ljust(16)
+  typer.echo(f"  {field_column}{header}")
+  coverage = report.coverage()
+  for field in report.populated_fields():
+    cells = "  ".join(
+        f"{coverage[field][name]}/{total}".center(11) for name in names)
+    typer.echo(f"  {field.ljust(16)}{cells}")
+
+  art = report.art_coverage()
+  art_cells = "  ".join(f"{art[name]}/{total}".center(11) for name in names)
+  art_label = "album art".ljust(16)
+  typer.echo(f"  {art_label}{art_cells}")
+
+  failures = report.failures()
+  if failures:
+    typer.echo("")
+    for source, count in failures.items():
+      typer.echo(f"  {source} failed on {count}/{total}")
