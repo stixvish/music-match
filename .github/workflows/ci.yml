@@ -44,7 +44,9 @@ jobs:
           SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
           SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
           ACOUSTID_API_KEY: ${{ secrets.ACOUSTID_API_KEY }}
-          MUSICBRAINZ_USER_AGENT: music-match-ci/0.1.0 ( ci@example.com )
+          MUSICBRAINZ_USER_AGENT: >-
+            music-match-ci/0.1.0 (
+            +https://github.com/stixvish/music-match )
         # Exit code 5 is "no tests collected", which is not a failure —
         # every test here skips itself when its source's credentials are
         # absent, so a fork without secrets collects nothing to run. Any
