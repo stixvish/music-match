@@ -1,1 +1,1 @@
-"""NiceGUI app and review UI."""
+"""NiceGUI review interface."""

@@ -37,6 +37,8 @@ from music_match.sources import base as source_base
 from music_match.sources import build_all
 from music_match.tagging import tags as tag_io
 from music_match.tagging import videorip as videorip_lib
+from music_match.web import app as web_app
+from music_match.web import state as web_state
 
 app = typer.Typer(
     help="Tag a personal music library from public metadata sources.",
@@ -2234,3 +2236,32 @@ def _relative(path: pathlib.Path, sources_config: loader.SourcesConfig) -> str:
     except ValueError:
       pass
   return str(path)
+
+
+@app.command("web")
+def web(
+    sources: SourcesOption = loader.DEFAULT_SOURCES_FILE,
+    db: DbOption = connection.DEFAULT_DB_FILE,
+    art_store: ArtStoreOption = art_lib.DEFAULT_STORE_DIR,
+    host: Annotated[
+        str, typer.Option("--host", help="Address to bind.")] = "127.0.0.1",
+    port: Annotated[int,
+                    typer.Option("--port", help="Port to listen on.")] = 8080,
+    open_browser: Annotated[
+        bool,
+        typer.Option("--open/--no-open", help="Open a browser on start."
+                    )] = True,
+) -> None:
+  """Serves the review queue and link submission in a browser.
+
+  Args:
+    sources: Path to sources.toml.
+    db: Path to the SQLite database.
+    art_store: Directory holding stored cover art.
+    host: Address to bind.
+    port: Port to listen on.
+    open_browser: Whether to open a browser on start.
+  """
+  settings = web_state.Settings(db=db, sources=sources, art_store=art_store)
+  typer.echo(f"serving http://{host}:{port} from {db}")
+  web_app.run(settings, host=host, port=port, show=open_browser)
