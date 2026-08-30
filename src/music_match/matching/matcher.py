@@ -26,6 +26,7 @@ from typing import Iterable, Mapping, Protocol, Sequence
 from music_match.config.loader import PrecedenceConfig
 from music_match.matching import normalize as norm
 from music_match.matching import score as scoring
+from music_match.sources.base import SourceError
 from music_match.sources.base import SourceQuery
 from music_match.sources.base import SourceResult
 from music_match.tagging.fields import ALL_FIELDS
@@ -413,9 +414,11 @@ def match_track(query: SourceQuery,
       continue
     try:
       results = source.search(query, limit=CANDIDATES_PER_SOURCE)
-    except Exception as err:  # pylint: disable=broad-exception-caught
+    except SourceError as err:
       # One source being down must not cost the match; the others still
-      # have something to say.
+      # have something to say. Only *expected* source failures are
+      # swallowed here — anything else is a bug in an adapter and should
+      # surface rather than quietly reduce the evidence.
       notes.append(f"{source.name} failed: {err}")
       continue
     chosen = best_candidate(query, results)

@@ -992,12 +992,20 @@ def _match_all(conn: sqlite3.Connection, pending: list[sqlite3.Row],
       typer.echo(f"  skipped {path.name}: no title to search on", err=True)
       continue
 
-    result = match_lib.match_track(query,
-                                   available,
-                                   precedence_config,
-                                   genre=row["detected_genre"],
-                                   auto_apply=auto_apply,
-                                   review_floor=review_floor)
+    try:
+      result = match_lib.match_track(query,
+                                     available,
+                                     precedence_config,
+                                     genre=row["detected_genre"],
+                                     auto_apply=auto_apply,
+                                     review_floor=review_floor)
+    except Exception as err:  # pylint: disable=broad-exception-caught
+      # A long batch must survive one bad track, but the failure is
+      # reported loudly rather than being recorded as "no match" — that
+      # would look like a verdict instead of a crash.
+      typer.echo(f"  ERROR on {path.name}: {type(err).__name__}: {err}",
+                 err=True)
+      continue
     queries.record_match(
         conn,
         track_id=int(row["id"]),

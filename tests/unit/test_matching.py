@@ -337,3 +337,27 @@ def test_one_source_alone_is_weaker_than_several() -> None:
 def test_confidence_maps_to_a_status(confidence: float, expected: str) -> None:
   """The three outcomes the pipeline acts on."""
   assert matcher.status_for(confidence, 0.85, 0.45) == expected
+
+
+@pytest.mark.parametrize("stem,artist,title", [
+    ("Tiesto - All Nighter (Extended Mix)", "Tiesto",
+     "All Nighter (Extended Mix)"),
+    ("Loud Luxury, ZOHARA - COLORADO (Extended)", "Loud Luxury, ZOHARA",
+     "COLORADO (Extended)"),
+    ("Daft_Punk_-_Around_the_World", "Daft Punk", "Around the World"),
+    ("Untitled Track", None, "Untitled Track"),
+])
+def test_filename_yields_a_query(stem: str, artist: str | None,
+                                 title: str) -> None:
+  """A file with no title tag is not a lost cause.
+
+  WAV's tagging support is an afterthought, so the beatport files carry
+  no title at all — but their names read "Artist - Title", which is
+  enough to search on.
+  """
+  assert norm.split_filename(stem) == (artist, title)
+
+
+def test_filename_split_ignores_a_leading_separator() -> None:
+  """A name that starts with the separator has no artist half."""
+  assert norm.split_filename(" - Title")[0] is None

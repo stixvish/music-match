@@ -11,6 +11,7 @@ from typer import testing
 from tests.unit import conftest
 
 from music_match import __version__
+from music_match import probe as probe_lib
 from music_match.cli import main
 from music_match.db import connection
 from music_match.db import queries
@@ -760,13 +761,21 @@ def test_probe_reads_queries_from_files(
   assert "track.m4a" in result.stdout
 
 
-def test_probe_skips_a_file_with_no_title(
+def test_probe_uses_the_filename_when_a_file_is_untagged(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """An untagged file has nothing to search on and is skipped."""
-  audio = conftest.write_m4a(tmp_path / "untagged.m4a")
-  fake_sources(monkeypatch, {"spotify": fields.TrackTags(title="X")})
-  result = runner.invoke(main.app, ["probe", str(audio)])
-  assert result.exit_code == 1
+  """An untagged file is searched for by name rather than skipped.
+
+  This used to skip. It should not: nearly every file here is named
+  "Artist - Title", and for WAV that name is the only metadata there is.
+  """
+  config = build_source_tree(tmp_path, ("Tiesto - All Nighter.m4a",))
+  fake_sources(monkeypatch, {"spotify": fields.TrackTags(title="All Nighter")})
+  result = runner.invoke(
+      main.app,
+      ["probe", str(tmp_path / "yt-dlp" / "Tiesto - All Nighter.m4a")])
+  assert result.exit_code == 0
+  assert "All Nighter" in result.stdout
+  del config
 
 
 def test_probe_needs_something_to_probe(
@@ -940,3 +949,18 @@ def test_match_ignore_needs_an_indexed_track(tmp_path: pathlib.Path) -> None:
       str(tmp_path / "state.db")
   ])
   assert result.exit_code == 1
+
+
+def test_probe_falls_back_to_the_filename(tmp_path: pathlib.Path) -> None:
+  """An untagged file is searched for by its name rather than skipped.
+
+  This is the normal case for WAV, whose tagging support is an
+  afterthought, and it is how the beatport folder gets matched at all.
+  """
+  folder = tmp_path / "yt-dlp"
+  folder.mkdir(parents=True, exist_ok=True)
+  audio = conftest.write_m4a(folder / "Tiesto - All Nighter.m4a")
+  query = probe_lib.query_for_file(audio)
+  assert query.is_usable()
+  assert query.title == "All Nighter"
+  assert query.artist == "Tiesto"

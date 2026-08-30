@@ -243,6 +243,10 @@ scored 0.90 or better and a genuinely ambiguous one — a radio edit that
 four sources placed on four different releases — scored 0.81. That gap set
 the threshold, but the sample was small; expect to revisit it.
 
+A file carrying **no title tag at all** is searched for by its file name
+rather than skipped — nearly everything here is named `Artist - Title`,
+and for the WAV files that name is the only metadata they have.
+
 **What confidence does not measure:** whether the *release* is the one you
 would have picked. It measures whether this is the right recording and
 whether the sources agree. A track can be confidently matched to a

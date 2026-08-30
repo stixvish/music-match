@@ -203,3 +203,28 @@ def release_key(album: str | None) -> str:
       continue
     break
   return normalize(trimmed) or normalize(album)
+
+
+def split_filename(stem: str) -> tuple[str | None, str | None]:
+  """Reads an artist and title out of a file name.
+
+  The last resort when a file carries no title tag at all — which is the
+  normal case for WAV, whose tagging support is an afterthought, and
+  happens with fresh downloads too. Nearly every file in a library like
+  this is named "Artist - Title", so that convention is worth reading
+  rather than skipping the track entirely.
+
+  Args:
+    stem: The file name without its extension.
+
+  Returns:
+    (artist, title). The artist is None when the name carries no
+    separator, in which case the whole name is taken as the title.
+  """
+  cleaned = stem.replace("_", " ").strip()
+  for separator in (" - ", " – ", " — "):
+    if separator in cleaned:
+      artist, _, title = cleaned.partition(separator)
+      if artist.strip() and title.strip():
+        return (artist.strip(), title.strip())
+  return (None, cleaned or None)
