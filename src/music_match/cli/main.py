@@ -16,6 +16,7 @@ import typer
 
 from music_match import __version__
 from music_match import library
+from music_match import intake as intake_lib
 from music_match import probe as probe_lib
 from music_match.matching import matcher as match_lib
 from music_match.config import env
@@ -1663,3 +1664,187 @@ def _find_rips(
     if detection.is_rip:
       found.append((item, detection))
   return found
+
+
+@app.command("intake")
+def intake(
+    links: Annotated[list[str] | None,
+                     typer.Argument(
+                         help="Links to download. Albums and playlists are "
+                         "expanded.")] = None,
+    from_file: Annotated[
+        pathlib.Path | None,
+        typer.Option("--from-file",
+                     help="Read links from a file, one per line. Blank "
+                     "lines and # comments are ignored.")] = None,
+    sources: SourcesOption = loader.DEFAULT_SOURCES_FILE,
+    db: DbOption = connection.DEFAULT_DB_FILE,
+    into: Annotated[
+        str,
+        typer.Option("--into",
+                     help="Which configured source folder to download "
+                     "into.")] = "yt-dlp",
+    assume_new: Annotated[
+        bool,
+        typer.Option("--assume-new",
+                     help="Do not ask about possible duplicates; download "
+                     "them. For unattended runs.")] = False,
+    dry_run: DryRunOption = False,
+) -> None:
+  """Downloads tracks from submitted links.
+
+  Runs the two pre-download dedup layers first: anything already in the
+  archive is skipped outright, and anything that merely *looks* like a
+  track you already have raises a question rather than being skipped —
+  a shared title is often a different mix.
+
+  Args:
+    links: Links to download.
+    from_file: Read links from a file instead of, or as well as,
+      arguments.
+    sources: Path to sources.toml.
+    db: Path to the SQLite database.
+    into: Which configured source folder to download into.
+    assume_new: Download possible duplicates without asking.
+    dry_run: Report what would be downloaded without fetching anything.
+  """
+  sources_config = _load_sources_or_exit(sources)
+  folder = sources_config.folders.get(into)
+  if folder is None:
+    typer.echo(
+        f"error: no source folder named '{into}'."
+        f" Known: {_joined(sources_config.folders)}",
+        err=True)
+    raise typer.Exit(code=1)
+
+  submitted = _submitted_links(links, from_file)
+  if not submitted:
+    typer.echo("nothing submitted: give links, or --from-file", err=True)
+    raise typer.Exit(code=1)
+
+  typer.echo(f"expanding {len(submitted)} link(s)...")
+  try:
+    entries = intake_lib.expand(submitted)
+  except intake_lib.IntakeError as err:
+    typer.echo(f"error: {err}", err=True)
+    raise typer.Exit(code=1) from err
+  typer.echo(f"{len(entries)} track(s) found")
+
+  with connection.open_db(db) as conn:
+    wanted = _after_dedup(conn, entries, assume_new)
+    if dry_run:
+      typer.echo(f"dry run: would download {len(wanted)} track(s) into"
+                 f" {folder.path}")
+      for entry in wanted:
+        typer.echo(f"  {entry.label()}")
+      return
+    _download_all(conn, wanted, folder)
+
+
+def _submitted_links(links: list[str] | None,
+                     from_file: pathlib.Path | None) -> list[str]:
+  """Collects links from arguments and from a file.
+
+  Args:
+    links: Links given as arguments.
+    from_file: A file of links, one per line.
+
+  Returns:
+    Every link, in order, deduplicated.
+
+  Raises:
+    typer.Exit: If the file cannot be read.
+  """
+  text = "\n".join(links or [])
+  if from_file is not None:
+    try:
+      text += "\n" + from_file.read_text(encoding="utf-8")
+    except OSError as err:
+      typer.echo(f"error: could not read {from_file}: {err}", err=True)
+      raise typer.Exit(code=1) from err
+  return intake_lib.parse_links(text)
+
+
+def _after_dedup(conn: sqlite3.Connection, entries: list[intake_lib.Entry],
+                 assume_new: bool) -> list[intake_lib.Entry]:
+  """Applies both pre-download dedup layers.
+
+  Args:
+    conn: An open database connection.
+    entries: Every expanded entry.
+    assume_new: Skip the confirmation prompt and keep everything.
+
+  Returns:
+    The entries still worth downloading.
+  """
+  wanted = []
+  archived = 0
+  for entry in entries:
+    if intake_lib.in_archive(conn, entry):
+      archived += 1
+      continue
+    candidates = intake_lib.find_candidates(conn, entry)
+    if candidates and not assume_new and not _confirm_download(
+        entry, candidates):
+      continue
+    wanted.append(entry)
+  if archived:
+    typer.echo(f"{archived} already downloaded, skipped")
+  return wanted
+
+
+def _confirm_download(entry: intake_lib.Entry,
+                      candidates: list[intake_lib.Candidate]) -> bool:
+  """Asks whether an entry that looks familiar should still be fetched.
+
+  Deliberately a question rather than a decision. A shared title is often
+  a legitimately different mix, and silently skipping a track that was
+  wanted is worse than fetching one already held — the fingerprint layer
+  catches a true duplicate after download anyway.
+
+  Args:
+    entry: The entry in question.
+    candidates: What it might duplicate.
+
+  Returns:
+    True if it should be downloaded.
+  """
+  typer.echo(f"\n{entry.label()} may already be in the library:")
+  for candidate in candidates[:3]:
+    typer.echo(f"    {candidate.describe()}")
+  return typer.confirm("  download it anyway?", default=True)
+
+
+def _download_all(conn: sqlite3.Connection, entries: list[intake_lib.Entry],
+                  folder: loader.SourceFolder) -> None:
+  """Downloads entries and records each one as it completes.
+
+  Args:
+    conn: An open database connection.
+    entries: What to download.
+    folder: The source folder to download into.
+  """
+  if not entries:
+    typer.echo("nothing new to download")
+    return
+  done = failed = 0
+  for position, entry in enumerate(entries, start=1):
+    typer.echo(f"  [{position}/{len(entries)}] {entry.label()}")
+    try:
+      result = intake_lib.download_entry(entry, folder.path)
+    except intake_lib.IntakeError as err:
+      failed += 1
+      typer.echo(f"      failed: {err}", err=True)
+      continue
+    track_id = queries.upsert_track(conn,
+                                    path=result.path,
+                                    source_name=folder.name)
+    # Recorded only after the file is on disk, so an interrupted run
+    # retries the download rather than skipping it forever.
+    intake_lib.record_download(conn, entry, track_id)
+    conn.commit()
+    done += 1
+    if not result.stamped:
+      typer.echo("      note: could not write the source id into the file",
+                 err=True)
+  typer.echo(f"downloaded {done}, failed {failed}")

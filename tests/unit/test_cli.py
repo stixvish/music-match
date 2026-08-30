@@ -11,7 +11,9 @@ from typer import testing
 from tests.unit import conftest
 
 from music_match import __version__
+from music_match import intake as intake_lib
 from music_match import probe as probe_lib
+from music_match.intake import dedup as dedup_intake
 from music_match.cli import main
 from music_match.db import connection
 from music_match.db import queries
@@ -1294,3 +1296,255 @@ def test_restore_refuses_a_file_outside_quarantine(
   assert result.exit_code == 1
   assert stray.exists()
   assert not (tmp_path / "yt-dlp" / "track.m4a").exists()
+
+
+def intake_workspace(
+    tmp_path: pathlib.Path) -> tuple[pathlib.Path, pathlib.Path]:
+  """Builds a configured but empty library for intake tests.
+
+  Args:
+    tmp_path: The temporary directory.
+
+  Returns:
+    The sources.toml path and the database path.
+  """
+  folder = tmp_path / "yt-dlp"
+  folder.mkdir(parents=True, exist_ok=True)
+  config = tmp_path / "sources.toml"
+  config.write_text(
+      f'[sources.yt-dlp]\npath = "{folder}"\n\n'
+      f'[duplicates]\npath = "{tmp_path / "dupes"}"\n\n'
+      f'[review]\npath = "{tmp_path / "review"}"\n',
+      encoding="utf-8")
+  return (config, tmp_path / "state.db")
+
+
+SUBMITTED = intake_lib.Entry(video_id="abc123",
+                             extractor="youtube",
+                             title="Strobe",
+                             uploader="deadmau5",
+                             duration_seconds=636.0,
+                             url="https://x/abc123")
+
+
+def fake_intake(monkeypatch: pytest.MonkeyPatch,
+                entries: list[intake_lib.Entry],
+                downloads: list[pathlib.Path] | None = None) -> list[str]:
+  """Replaces expansion and downloading so no network is touched.
+
+  Args:
+    monkeypatch: pytest's patching fixture.
+    entries: What expansion should return.
+    downloads: Files each download should produce, in order.
+
+  Returns:
+    A list that records which entries were downloaded.
+  """
+  fetched: list[str] = []
+  queue = list(downloads or [])
+
+  def fake_download(entry: intake_lib.Entry, destination: pathlib.Path,
+                    **_: object) -> intake_lib.Download:
+    fetched.append(entry.video_id)
+    path = queue.pop(0) if queue else conftest.write_m4a(destination /
+                                                         f"{entry.label()}.m4a")
+    return intake_lib.Download(entry=entry, path=path, stamped=True)
+
+  monkeypatch.setattr(main.intake_lib, "expand", lambda urls: entries)
+  monkeypatch.setattr(main.intake_lib, "download_entry", fake_download)
+  return fetched
+
+
+def test_intake_dry_run_downloads_nothing(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The plan is reported without fetching anything."""
+  config, db_path = intake_workspace(tmp_path)
+  fetched = fake_intake(monkeypatch, [SUBMITTED])
+  result = runner.invoke(main.app, [
+      "intake", "https://x/abc123", "--sources",
+      str(config), "--db",
+      str(db_path), "--dry-run"
+  ])
+  assert result.exit_code == 0
+  assert "would download 1" in result.stdout
+  assert not fetched
+
+
+def test_intake_downloads_and_records(tmp_path: pathlib.Path,
+                                      monkeypatch: pytest.MonkeyPatch) -> None:
+  """A new link is fetched, indexed, and written to the archive."""
+  config, db_path = intake_workspace(tmp_path)
+  fetched = fake_intake(monkeypatch, [SUBMITTED])
+  result = runner.invoke(main.app, [
+      "intake", "https://x/abc123", "--sources",
+      str(config), "--db",
+      str(db_path)
+  ])
+  assert result.exit_code == 0
+  assert fetched == ["abc123"]
+  with connection.open_db(db_path) as conn:
+    assert dedup_intake.in_archive(conn, SUBMITTED)
+    assert queries.count_tracks(conn) == 1
+
+
+def test_intake_skips_what_is_already_archived(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Layer 1: instant, and with no network call at all."""
+  config, db_path = intake_workspace(tmp_path)
+  fake_intake(monkeypatch, [SUBMITTED])
+  runner.invoke(main.app, [
+      "intake", "https://x/abc123", "--sources",
+      str(config), "--db",
+      str(db_path)
+  ])
+
+  fetched = fake_intake(monkeypatch, [SUBMITTED])
+  result = runner.invoke(main.app, [
+      "intake", "https://x/abc123", "--sources",
+      str(config), "--db",
+      str(db_path)
+  ])
+  assert "1 already downloaded" in result.stdout
+  assert not fetched
+
+
+def test_intake_asks_before_skipping_a_lookalike(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Layer 2 asks rather than decides.
+
+  A shared title is often a legitimately different mix, so skipping one
+  silently is worse than downloading a duplicate the fingerprint layer
+  will catch anyway.
+  """
+  config, db_path = intake_workspace(tmp_path)
+  with connection.open_db(db_path) as conn:
+    queries.upsert_track(conn,
+                         path=tmp_path / "yt-dlp" / "deadmau5 - Strobe.m4a",
+                         source_name="yt-dlp",
+                         duration_seconds=636.0)
+    conn.commit()
+
+  fetched = fake_intake(monkeypatch, [SUBMITTED])
+  declined = runner.invoke(main.app, [
+      "intake", "https://x/abc123", "--sources",
+      str(config), "--db",
+      str(db_path)
+  ],
+                           input="n\n")
+  assert "may already be in the library" in declined.stdout
+  assert not fetched
+
+  accepted = runner.invoke(main.app, [
+      "intake", "https://x/abc123", "--sources",
+      str(config), "--db",
+      str(db_path)
+  ],
+                           input="y\n")
+  assert accepted.exit_code == 0
+  assert fetched == ["abc123"]
+
+
+def test_intake_can_skip_the_question(tmp_path: pathlib.Path,
+                                      monkeypatch: pytest.MonkeyPatch) -> None:
+  """`--assume-new` is for unattended runs."""
+  config, db_path = intake_workspace(tmp_path)
+  with connection.open_db(db_path) as conn:
+    queries.upsert_track(conn,
+                         path=tmp_path / "yt-dlp" / "deadmau5 - Strobe.m4a",
+                         source_name="yt-dlp",
+                         duration_seconds=636.0)
+    conn.commit()
+  fetched = fake_intake(monkeypatch, [SUBMITTED])
+  result = runner.invoke(main.app, [
+      "intake", "https://x/abc123", "--sources",
+      str(config), "--db",
+      str(db_path), "--assume-new"
+  ])
+  assert "may already be in the library" not in result.stdout
+  assert fetched == ["abc123"]
+
+
+def test_intake_reads_links_from_a_file(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A file of links is the way a large batch gets submitted."""
+  config, db_path = intake_workspace(tmp_path)
+  links = tmp_path / "links.txt"
+  links.write_text("# a batch\nhttps://x/abc123\n", encoding="utf-8")
+  fake_intake(monkeypatch, [SUBMITTED])
+  result = runner.invoke(main.app, [
+      "intake", "--from-file",
+      str(links), "--sources",
+      str(config), "--db",
+      str(db_path), "--dry-run"
+  ])
+  assert "would download 1" in result.stdout
+
+
+def test_intake_needs_something_to_do(tmp_path: pathlib.Path) -> None:
+  """With no links at all the command says what it needs."""
+  config, db_path = intake_workspace(tmp_path)
+  result = runner.invoke(
+      main.app, ["intake", "--sources",
+                 str(config), "--db",
+                 str(db_path)])
+  assert result.exit_code == 1
+
+
+def test_intake_rejects_an_unknown_destination(tmp_path: pathlib.Path) -> None:
+  """Downloads only ever land in a configured source folder."""
+  config, db_path = intake_workspace(tmp_path)
+  result = runner.invoke(main.app, [
+      "intake", "https://x/abc123", "--sources",
+      str(config), "--db",
+      str(db_path), "--into", "nowhere"
+  ])
+  assert result.exit_code == 1
+
+
+def test_intake_survives_a_failed_download(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """One dead link in a batch must not cost the rest."""
+  config, db_path = intake_workspace(tmp_path)
+  second = intake_lib.Entry(video_id="def456",
+                            extractor="youtube",
+                            title="Ghosts n Stuff",
+                            uploader="deadmau5")
+
+  def failing(entry: intake_lib.Entry, destination: pathlib.Path,
+              **_: object) -> intake_lib.Download:
+    if entry.video_id == "abc123":
+      raise intake_lib.IntakeError("video unavailable")
+    return intake_lib.Download(entry=entry,
+                               path=conftest.write_m4a(destination / "b.m4a"),
+                               stamped=True)
+
+  monkeypatch.setattr(main.intake_lib, "expand",
+                      lambda urls: [SUBMITTED, second])
+  monkeypatch.setattr(main.intake_lib, "download_entry", failing)
+  result = runner.invoke(
+      main.app,
+      ["intake", "https://x/1", "--sources",
+       str(config), "--db",
+       str(db_path)])
+  assert "downloaded 1, failed 1" in result.stdout
+
+
+def test_a_failed_download_is_not_archived(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Archiving a failure would skip it forever on every future run."""
+  config, db_path = intake_workspace(tmp_path)
+
+  def failing(entry: intake_lib.Entry, destination: pathlib.Path,
+              **_: object) -> intake_lib.Download:
+    del destination
+    raise intake_lib.IntakeError(f"unavailable: {entry.video_id}")
+
+  monkeypatch.setattr(main.intake_lib, "expand", lambda urls: [SUBMITTED])
+  monkeypatch.setattr(main.intake_lib, "download_entry", failing)
+  runner.invoke(
+      main.app,
+      ["intake", "https://x/1", "--sources",
+       str(config), "--db",
+       str(db_path)])
+  with connection.open_db(db_path) as conn:
+    assert not dedup_intake.in_archive(conn, SUBMITTED)
