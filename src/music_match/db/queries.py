@@ -203,9 +203,14 @@ def tracks_for_matching(
   Yields:
     Rows with id, path, duration and detected genre.
   """
-  sql = ("SELECT id, path, source_name, duration_seconds, detected_genre,"
-         "       genre_confidence, matched_at"
-         " FROM tracks WHERE id NOT IN (SELECT track_id FROM wont_match)")
+  sql = (
+      "SELECT id, path, source_name, duration_seconds, detected_genre,"
+      "       genre_confidence, matched_at"
+      " FROM tracks"
+      " WHERE id NOT IN (SELECT track_id FROM wont_match)"
+      # A quarantined file is waiting on a human, and matching a music
+      # video's audio is the API call this whole check exists to save.
+      "   AND match_status != 'quarantined'")
   parameters: tuple[str, ...] = ()
   if source_name is not None:
     sql += " AND source_name = ?"
@@ -233,6 +238,34 @@ def tracks_with_matches(
     sql += " AND source_name = ?"
     parameters = (source_name,)
   yield from connection.execute(sql + " ORDER BY path", parameters)
+
+
+def set_match_status(connection: sqlite3.Connection, track_id: int,
+                     status: str) -> None:
+  """Sets a track's match status.
+
+  Args:
+    connection: An open connection.
+    track_id: The track's row id.
+    status: The new status, from the schema's allowed set.
+  """
+  connection.execute(
+      "UPDATE tracks SET match_status = ?, updated_at = datetime('now')"
+      " WHERE id = ?", (status, track_id))
+
+
+def quarantined_tracks(connection: sqlite3.Connection) -> Iterator[sqlite3.Row]:
+  """Yields tracks currently held for a human decision.
+
+  Args:
+    connection: An open connection.
+
+  Yields:
+    Rows with id and path.
+  """
+  yield from connection.execute(
+      "SELECT id, path, source_name FROM tracks"
+      " WHERE match_status = 'quarantined' ORDER BY path")
 
 
 def mark_wont_match(connection: sqlite3.Connection,

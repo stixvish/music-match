@@ -14,3 +14,9 @@ check_for_video_rips = false
 # OUTSIDE the source folders above, or the next scan will index it again.
 [duplicates]
 path = "~/Music/_low-quality-duplicates"
+
+# Where files awaiting a human decision are moved. Suspected video rips
+# go to a `possible-video-rip` folder under this. Keep it OUTSIDE the
+# source folders above, for the same reason as [duplicates].
+[review]
+path = "~/Music/_review"

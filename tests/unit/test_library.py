@@ -39,7 +39,8 @@ def build_library(root: pathlib.Path) -> loader.SourcesConfig:
                               path=root / "beatport",
                               check_for_video_rips=False),
   },
-                              duplicates_path=root / "dupes")
+                              duplicates_path=root / "dupes",
+                              review_path=root / "review")
 
 
 def test_walk_finds_audio_recursively(tmp_path: pathlib.Path) -> None:
@@ -100,7 +101,8 @@ def test_walk_reports_a_missing_folder(tmp_path: pathlib.Path) -> None:
                               path=tmp_path / "gone",
                               check_for_video_rips=False)
   },
-                                 duplicates_path=tmp_path / "dupes")
+                                 duplicates_path=tmp_path / "dupes",
+                                 review_path=tmp_path / "review")
   assert list(library.walk(sources, "yt-dlp"))
   with pytest.raises(FileNotFoundError, match="gone"):
     list(library.walk(missing))

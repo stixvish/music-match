@@ -1121,3 +1121,154 @@ def test_undo_rejects_an_ambiguous_prefix() -> None:
   """A prefix matching two writes is refused rather than guessed at."""
   with pytest.raises(LookupError, match="matches 2 batches"):
     main.resolve_batch("ab", ["abcd", "abef"])
+
+
+def rip_library(tmp_path: pathlib.Path,
+                monkeypatch: pytest.MonkeyPatch,
+                check: bool = True) -> tuple[pathlib.Path, pathlib.Path]:
+  """Builds a library holding one video rip and one clean file.
+
+  Args:
+    tmp_path: The temporary directory.
+    monkeypatch: pytest's patching fixture.
+    check: Whether the source folder opts into rip checking.
+
+  Returns:
+    The sources.toml path and the database path.
+  """
+  folder = tmp_path / "yt-dlp"
+  folder.mkdir(parents=True, exist_ok=True)
+  conftest.write_m4a(folder / "Artist - Song Official Video.m4a")
+  conftest.write_m4a(folder / "Artist - Clean Song.m4a")
+  config = tmp_path / "sources.toml"
+  config.write_text(
+      f'[sources.yt-dlp]\npath = "{folder}"\n'
+      f'check_for_video_rips = {"true" if check else "false"}\n\n'
+      f'[duplicates]\npath = "{tmp_path / "dupes"}"\n\n'
+      f'[review]\npath = "{tmp_path / "review"}"\n',
+      encoding="utf-8")
+  fake_fingerprints(
+      monkeypatch, {
+          "Artist - Song Official Video.m4a": BASE_VALUES,
+          "Artist - Clean Song.m4a": OTHER_VALUES,
+      })
+  db_path = tmp_path / "state.db"
+  runner.invoke(main.app,
+                ["scan", "--sources",
+                 str(config), "--db",
+                 str(db_path)])
+  return (config, db_path)
+
+
+def test_video_rips_list_reports_only_rips(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The clean file is not listed."""
+  config, _ = rip_library(tmp_path, monkeypatch)
+  result = runner.invoke(main.app,
+                         ["video-rips", "list", "--sources",
+                          str(config)])
+  assert "Official Video" in result.stdout
+  assert "Clean Song" not in result.stdout
+
+
+def test_video_rips_respects_the_folder_setting(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A folder with checking off is left alone.
+
+  Beatport files are bought, not ripped, which is what that setting is
+  for.
+  """
+  config, _ = rip_library(tmp_path, monkeypatch, check=False)
+  result = runner.invoke(main.app,
+                         ["video-rips", "list", "--sources",
+                          str(config)])
+  assert "no suspected video rips" in result.stdout
+
+
+def test_quarantine_reports_without_moving(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Without --apply nothing moves."""
+  config, db_path = rip_library(tmp_path, monkeypatch)
+  result = runner.invoke(main.app, [
+      "video-rips", "quarantine", "--sources",
+      str(config), "--db",
+      str(db_path)
+  ])
+  assert "reported only" in result.stdout
+  assert (tmp_path / "yt-dlp" / "Artist - Song Official Video.m4a").exists()
+
+
+def test_quarantine_moves_and_marks(tmp_path: pathlib.Path,
+                                    monkeypatch: pytest.MonkeyPatch) -> None:
+  """With --apply the file moves aside and the track is marked."""
+  config, db_path = rip_library(tmp_path, monkeypatch)
+  runner.invoke(main.app, [
+      "video-rips", "quarantine", "--sources",
+      str(config), "--db",
+      str(db_path), "--apply"
+  ])
+  moved = (tmp_path / "review" / main.QUARANTINE_SUBFOLDER / "yt-dlp" /
+           "Artist - Song Official Video.m4a")
+  assert moved.exists()
+  assert not (tmp_path / "yt-dlp" / "Artist - Song Official Video.m4a").exists()
+  with connection.open_db(db_path) as conn:
+    statuses = dict(queries.match_status_counts(conn))
+  assert statuses.get("quarantined") == 1
+
+
+def test_quarantined_tracks_are_not_matched(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Not wasting the API call is the entire point of this stage."""
+  config, db_path = rip_library(tmp_path, monkeypatch)
+  runner.invoke(main.app, [
+      "video-rips", "quarantine", "--sources",
+      str(config), "--db",
+      str(db_path), "--apply"
+  ])
+  fake_matcher(monkeypatch, a_match())
+  result = runner.invoke(main.app, [
+      "match", "run", "--sources",
+      str(config), "--db",
+      str(db_path), "--dry-run"
+  ])
+  assert "1 tracks" in result.stdout
+
+
+def test_restore_puts_a_file_back(tmp_path: pathlib.Path,
+                                  monkeypatch: pytest.MonkeyPatch) -> None:
+  """Once confirmed, the file returns and becomes matchable again."""
+  config, db_path = rip_library(tmp_path, monkeypatch)
+  runner.invoke(main.app, [
+      "video-rips", "quarantine", "--sources",
+      str(config), "--db",
+      str(db_path), "--apply"
+  ])
+  moved = (tmp_path / "review" / main.QUARANTINE_SUBFOLDER / "yt-dlp" /
+           "Artist - Song Official Video.m4a")
+  result = runner.invoke(main.app, [
+      "video-rips", "restore",
+      str(moved), "--sources",
+      str(config), "--db",
+      str(db_path)
+  ])
+  assert result.exit_code == 0
+  assert (tmp_path / "yt-dlp" / "Artist - Song Official Video.m4a").exists()
+  with connection.open_db(db_path) as conn:
+    statuses = dict(queries.match_status_counts(conn))
+  assert "quarantined" not in statuses
+
+
+def test_restore_refuses_an_unknown_source(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A file outside the expected layout cannot be placed."""
+  config, db_path = rip_library(tmp_path, monkeypatch)
+  stray = tmp_path / "elsewhere" / "track.m4a"
+  stray.parent.mkdir(parents=True)
+  conftest.write_m4a(stray)
+  result = runner.invoke(main.app, [
+      "video-rips", "restore",
+      str(stray), "--sources",
+      str(config), "--db",
+      str(db_path)
+  ])
+  assert result.exit_code == 1

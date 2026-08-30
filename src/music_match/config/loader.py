@@ -22,6 +22,10 @@ DEFAULT_GENRE_KEY = "default"
 # Used when sources.toml does not set [duplicates].path.
 DEFAULT_DUPLICATES_PATH = "~/Music/_low-quality-duplicates"
 
+# Used when sources.toml does not set [review].path. Quarantined files
+# wait here for a human to confirm them.
+DEFAULT_REVIEW_PATH = "~/Music/_review"
+
 
 class ConfigError(Exception):
   """Raised when a config file is missing, malformed, or incomplete."""
@@ -52,9 +56,12 @@ class SourcesConfig:
     duplicates_path: Where the lower-quality copy of a duplicate pair is
       moved. Audio files are never deleted outright, so dedup needs
       somewhere to put them.
+    review_path: Where files awaiting a human decision are moved —
+      suspected video rips, for now.
   """
   folders: Mapping[str, SourceFolder]
   duplicates_path: pathlib.Path
+  review_path: pathlib.Path
 
   def names(self) -> tuple[str, ...]:
     """Returns the configured folder names, in config order."""
@@ -255,35 +262,43 @@ def load_sources(path: pathlib.Path = DEFAULT_SOURCES_FILE) -> SourcesConfig:
         check_for_video_rips=check,
     )
   config = SourcesConfig(folders=folders,
-                         duplicates_path=_duplicates_path(document, path))
-  if config.contains(config.duplicates_path):
-    raise ConfigError(
-        f"[duplicates].path ({config.duplicates_path}) is inside a configured"
-        " source folder; dedup would move files there and the next scan would"
-        " index them straight back in")
+                         duplicates_path=_holding_path(document, path,
+                                                       "duplicates",
+                                                       DEFAULT_DUPLICATES_PATH),
+                         review_path=_holding_path(document, path, "review",
+                                                   DEFAULT_REVIEW_PATH))
+  for label, holding in (("duplicates", config.duplicates_path),
+                         ("review", config.review_path)):
+    if config.contains(holding):
+      raise ConfigError(
+          f"[{label}].path ({holding}) is inside a configured source folder;"
+          " files moved there would be indexed straight back in by the next"
+          " scan")
   return config
 
 
-def _duplicates_path(document: dict[str, Any],
-                     path: pathlib.Path) -> pathlib.Path:
-  """Reads [duplicates].path, falling back to the default location.
+def _holding_path(document: dict[str, Any], path: pathlib.Path, table: str,
+                  default: str) -> pathlib.Path:
+  """Reads a holding-folder path, falling back to its default.
 
   Args:
     document: The parsed sources.toml.
     path: The config file, used in error messages.
+    table: The table name, e.g. "duplicates" or "review".
+    default: Where to put files when the table is absent.
 
   Returns:
-    Where losing duplicates should be moved to, with `~` expanded.
+    The configured path, with `~` expanded.
 
   Raises:
-    ConfigError: If [duplicates] is present but malformed.
+    ConfigError: If the table is present but malformed.
   """
-  raw = document.get("duplicates", {})
+  raw = document.get(table, {})
   if not isinstance(raw, dict):
-    raise ConfigError(f"[duplicates] in {path} must be a table")
-  configured = raw.get("path", DEFAULT_DUPLICATES_PATH)
+    raise ConfigError(f"[{table}] in {path} must be a table")
+  configured = raw.get("path", default)
   if not isinstance(configured, str) or not configured:
-    raise ConfigError(f"[duplicates].path in {path} must be a non-empty string")
+    raise ConfigError(f"[{table}].path in {path} must be a non-empty string")
   return pathlib.Path(configured).expanduser()
 
 
