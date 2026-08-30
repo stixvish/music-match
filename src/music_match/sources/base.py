@@ -10,6 +10,7 @@ import abc
 import dataclasses
 from typing import Mapping
 
+from music_match.sources import http
 from music_match.tagging.fields import TrackTags
 
 
@@ -94,6 +95,31 @@ class MetadataSource(abc.ABC):
   #: Short lowercase identifier, matching the names used in
   #: precedence.toml.
   name: str = ""
+
+  def __init__(self, client: http.HttpClient) -> None:
+    """Stores the HTTP client this source makes its requests through.
+
+    Owned by the base class so a caller can reach it without knowing
+    which subclass it holds.
+
+    Args:
+      client: The configured client, carrying this source's rate limit.
+    """
+    self._client = client
+
+  @property
+  def client(self) -> http.HttpClient:
+    """Returns the HTTP client this source uses."""
+    return self._client
+
+  def disable_cache(self) -> None:
+    """Stops this source reading from or writing to the response cache.
+
+    Used by `probe --no-cache`, whose whole purpose is checking whether a
+    source's data has actually changed — which a cached answer would
+    hide.
+    """
+    self._client.cache = None
 
   @abc.abstractmethod
   def is_available(self) -> bool:

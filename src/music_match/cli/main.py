@@ -787,9 +787,7 @@ def _disable_caches(probe_sources: list[source_base.MetadataSource]) -> None:
     probe_sources: The sources to modify in place.
   """
   for source in probe_sources:
-    client = getattr(source, "_client", None)
-    if client is not None:
-      client.cache = None
+    source.disable_cache()
 
 
 def _probe_queries(

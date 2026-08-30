@@ -50,9 +50,9 @@ class DiscogsSource(base.MetadataSource):
       fetch_credits: Whether to spend an extra request per candidate on
         the release lookup that carries credits and the tracklist.
     """
-    self._client = client or http.HttpClient(
+    super().__init__(client or http.HttpClient(
         user_agent="music-match/0.1.0 +https://github.com/stixvish",
-        min_interval_seconds=MIN_INTERVAL_SECONDS)
+        min_interval_seconds=MIN_INTERVAL_SECONDS))
     self._fetch_credits = fetch_credits
 
   def is_available(self) -> bool:

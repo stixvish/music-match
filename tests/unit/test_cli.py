@@ -14,8 +14,9 @@ from music_match import __version__
 from music_match.cli import main
 from music_match.db import connection
 from music_match.db import queries
-from music_match.tagging import fields
 from music_match.sources import base as source_base
+from music_match.sources import http
+from music_match.tagging import fields
 from music_match.tagging import fingerprint as fp
 from music_match.tagging import genre as genre_lib
 from music_match.tagging import tags as tag_io
@@ -664,6 +665,7 @@ class ProbeStub(source_base.MetadataSource):
       name: The source name.
       tags: The tags to return, or None for no candidates.
     """
+    super().__init__(http.HttpClient(user_agent="test"))
     self.name = name
     self._tags = tags
 

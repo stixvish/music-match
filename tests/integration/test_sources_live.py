@@ -20,16 +20,16 @@ from music_match.sources import spotify
 
 pytestmark = pytest.mark.integration
 
+# Loaded at import time, not in a fixture: the skipif conditions below are
+# evaluated during collection, which happens before any fixture runs. A
+# fixture here would leave every credentialed test skipped on a machine
+# that has the credentials sitting in .env.
+env.load_env()
+
 # A release old enough and famous enough that every one of these services
 # is certain to hold it, so a failure means a shape change rather than a
 # gap in someone's catalogue.
 QUERY = base.SourceQuery(title="Around the World", artist="Daft Punk")
-
-
-@pytest.fixture(autouse=True)
-def _load_credentials() -> None:
-  """Loads .env so the sources can find their keys."""
-  env.load_env()
 
 
 def test_itunes_returns_a_usable_result() -> None:

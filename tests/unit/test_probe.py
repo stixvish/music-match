@@ -6,6 +6,7 @@ import pytest
 
 from music_match import probe as probe_lib
 from music_match.sources import base
+from music_match.sources import http
 from music_match.tagging.fields import TrackTags
 
 
@@ -28,6 +29,7 @@ class StubSource(base.MetadataSource):
       fails: Whether searching raises.
       art_url: Cover art URL to report.
     """
+    super().__init__(http.HttpClient(user_agent="test"))
     self.name = name
     self._tags = tags
     self._available = available

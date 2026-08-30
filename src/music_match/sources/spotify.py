@@ -38,9 +38,9 @@ class SpotifySource(base.MetadataSource):
     Args:
       client: HTTP client to use. One is created if not given.
     """
-    self._client = client or http.HttpClient(
-        user_agent="music-match/0.1.0",
-        min_interval_seconds=MIN_INTERVAL_SECONDS)
+    super().__init__(client or
+                     http.HttpClient(user_agent="music-match/0.1.0",
+                                     min_interval_seconds=MIN_INTERVAL_SECONDS))
     self._token: str | None = None
     self._token_expires_at = 0.0
 

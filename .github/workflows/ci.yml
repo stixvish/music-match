@@ -39,9 +39,10 @@ jobs:
           SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
           ACOUSTID_API_KEY: ${{ secrets.ACOUSTID_API_KEY }}
           MUSICBRAINZ_USER_AGENT: music-match-ci/0.1.0 ( ci@example.com )
-        # Exit code 5 is "no tests collected". The integration suite is
-        # empty until the first source module lands; an empty suite is
-        # not a failure, but any real failure still is.
+        # Exit code 5 is "no tests collected", which is not a failure —
+        # every test here skips itself when its source's credentials are
+        # absent, so a fork without secrets collects nothing to run. Any
+        # real failure still fails the job.
         run: |
           code=0
           uv run pytest tests/integration/ -q || code=$?

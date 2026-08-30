@@ -41,9 +41,9 @@ class MusicBrainzSource(base.MetadataSource):
       fetch_isrcs: Whether to spend an extra request per candidate
         looking up its ISRCs, which the search response omits.
     """
-    self._client = client or http.HttpClient(
+    super().__init__(client or http.HttpClient(
         user_agent=env.get(USER_AGENT_VAR) or _FALLBACK_USER_AGENT,
-        min_interval_seconds=MIN_INTERVAL_SECONDS)
+        min_interval_seconds=MIN_INTERVAL_SECONDS))
     self._fetch_isrcs = fetch_isrcs
 
   def is_available(self) -> bool:

@@ -32,9 +32,9 @@ class ITunesSource(base.MetadataSource):
     Args:
       client: HTTP client to use. One is created if not given.
     """
-    self._client = client or http.HttpClient(
-        user_agent="music-match/0.1.0",
-        min_interval_seconds=MIN_INTERVAL_SECONDS)
+    super().__init__(client or
+                     http.HttpClient(user_agent="music-match/0.1.0",
+                                     min_interval_seconds=MIN_INTERVAL_SECONDS))
 
   def is_available(self) -> bool:
     """Returns True: this API needs no credentials."""

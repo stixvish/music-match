@@ -533,3 +533,21 @@ def test_require_names_the_variable_and_the_source() -> None:
   """A missing credential says which one and who needed it."""
   with pytest.raises(env.MissingCredential, match="MY_KEY"):
     env.require("MY_KEY", "somesource")
+
+
+def test_disable_cache_reaches_every_source(
+    monkeypatch: pytest.MonkeyPatch) -> None:
+  """`probe --no-cache` must actually reach each source's client.
+
+  Reaching into a private attribute by name would fail silently on a
+  source that named it differently, leaving the flag doing nothing.
+  """
+  monkeypatch.setenv(discogs.TOKEN_VAR, "token")
+  monkeypatch.setenv(spotify.CLIENT_ID_VAR, "id")
+  monkeypatch.setenv(spotify.CLIENT_SECRET_VAR, "secret")
+  from music_match import sources  # pylint: disable=import-outside-toplevel
+
+  for built in sources.build_all():
+    built.client.cache = http.ResponseCache()
+    built.disable_cache()
+    assert built.client.cache is None, f"{built.name} kept its cache"
