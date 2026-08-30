@@ -1470,6 +1470,11 @@ def _short(value: object) -> str:
 
 QUARANTINE_SUBFOLDER = "possible-video-rip"
 
+# Files record only the bare source id, not which site it came
+# from, so a rebuilt archive row assumes the extractor everything
+# in this library was downloaded with.
+DEFAULT_ARCHIVE_EXTRACTOR = "youtube"
+
 
 @rips_app.command("list")
 def rips_list(
@@ -1848,3 +1853,159 @@ def _download_all(conn: sqlite3.Connection, entries: list[intake_lib.Entry],
       typer.echo("      note: could not write the source id into the file",
                  err=True)
   typer.echo(f"downloaded {done}, failed {failed}")
+
+
+@app.command("reindex")
+def reindex(
+    sources: SourcesOption = loader.DEFAULT_SOURCES_FILE,
+    db: DbOption = connection.DEFAULT_DB_FILE,
+    source: SourceNameOption = None,
+    limit: Annotated[
+        int,
+        typer.Option("--limit",
+                     help="Stop after this many files. 0 means no limit.")] = 0,
+    force: Annotated[
+        bool,
+        typer.
+        Option("--force", help="Re-fingerprint files that already have one."
+              )] = False,
+    skip_fingerprints: Annotated[
+        bool,
+        typer.Option("--skip-fingerprints",
+                     help="Rebuild the index and archive without "
+                     "fingerprinting.")] = False,
+    dry_run: DryRunOption = False,
+) -> None:
+  """Rebuilds local state from the files on disk.
+
+  The recovery path when the database is lost or corrupted, and the first
+  real command on a new machine. Nothing is downloaded and nothing is
+  re-tagged: it reads what the library already contains.
+
+  Three things are rebuilt. Every file is indexed with its duration and a
+  snapshot of its current tags, so a library that merely lost its
+  database is distinguishable from one that was never tagged. Every file
+  is fingerprinted, restoring the dedup index. And the download archive
+  is rebuilt from the source ids embedded at download time, so dedup
+  layer 1 does not restart from zero.
+
+  Args:
+    sources: Path to sources.toml.
+    db: Path to the SQLite database.
+    source: Limit to one configured source folder.
+    limit: Stop after this many files, or 0 for no limit.
+    force: Re-fingerprint files that already have one.
+    skip_fingerprints: Rebuild the index and archive only.
+    dry_run: Report what would be rebuilt without writing.
+  """
+  sources_config = _load_sources_or_exit(sources)
+  if not skip_fingerprints and not fp.have_fpcalc():
+    typer.echo(
+        "error: fpcalc not found on PATH. Install chromaprint (see SETUP.md),"
+        " or pass --skip-fingerprints.",
+        err=True)
+    raise typer.Exit(code=1)
+
+  try:
+    files = list(library.walk(sources_config, source))
+  except KeyError:
+    typer.echo(f"error: no source folder named '{source}'", err=True)
+    raise typer.Exit(code=1) from None
+  except FileNotFoundError as err:
+    typer.echo(f"error: {err}", err=True)
+    raise typer.Exit(code=1) from err
+
+  if limit:
+    files = files[:limit]
+  typer.echo(f"{len(files)} file(s) in the library")
+  if dry_run:
+    also = "" if skip_fingerprints else " and fingerprint them"
+    typer.echo(f"dry run: would index {len(files)} file(s){also}")
+    return
+
+  with connection.open_db(db) as conn:
+    summary = _reindex_all(conn, files, force, skip_fingerprints)
+  for label, count in summary.items():
+    typer.echo(f"  {label}: {count}")
+
+
+def _reindex_all(conn: sqlite3.Connection, files: list[library.LibraryFile],
+                 force: bool, skip_fingerprints: bool) -> dict[str, int]:
+  """Rebuilds index, fingerprints and archive from the files on disk.
+
+  Args:
+    conn: An open database connection.
+    files: The library files to read.
+    force: Re-fingerprint files that already have one.
+    skip_fingerprints: Skip fingerprinting entirely.
+
+  Returns:
+    Counts worth reporting, in display order.
+  """
+  known = set() if force else queries.fingerprinted_paths(conn)
+  counts = {
+      "indexed": 0,
+      "fingerprinted": 0,
+      "archive entries rebuilt": 0,
+      "already fully tagged": 0,
+      "failed": 0,
+  }
+  for position, item in enumerate(files, start=1):
+    try:
+      tags = tag_io.read_tags(item.path)
+      duration = tag_io.read_duration(item.path)
+    except tag_io.TagError as err:
+      counts["failed"] += 1
+      typer.echo(f"  skipped {item.path.name}: {err}", err=True)
+      continue
+
+    encoded = None
+    if not skip_fingerprints and str(item.path) not in known:
+      try:
+        fingerprint = fp.fingerprint_file(item.path)
+        encoded = fingerprint.encode()
+        duration = duration or fingerprint.duration
+        counts["fingerprinted"] += 1
+      except fp.FingerprintError as err:
+        typer.echo(f"  no fingerprint for {item.path.name}: {err}", err=True)
+
+    track_id = queries.upsert_track(conn,
+                                    path=item.path,
+                                    source_name=item.source.name,
+                                    fingerprint=encoded,
+                                    duration_seconds=duration)
+    queries.record_snapshot(conn, track_id, json.dumps(tags.as_dict()))
+    counts["indexed"] += 1
+    if tags.is_complete():
+      counts["already fully tagged"] += 1
+    if _rebuild_archive_entry(conn, tags, track_id, item.source.name):
+      counts["archive entries rebuilt"] += 1
+    conn.commit()
+    if position % 50 == 0 or position == len(files):
+      typer.echo(f"  {position}/{len(files)}")
+  return counts
+
+
+def _rebuild_archive_entry(conn: sqlite3.Connection, tags: tag_fields.TrackTags,
+                           track_id: int, source_name: str) -> bool:
+  """Restores one download-archive row from a file's embedded source id.
+
+  This is what the id written at download time exists for: without it, a
+  lost database means every previously downloaded link looks new again.
+
+  Args:
+    conn: An open database connection.
+    tags: The file's current tags.
+    track_id: The track's row id.
+    source_name: The source folder it came from, unused beyond clarity.
+
+  Returns:
+    True if an archive row was written.
+  """
+  del source_name
+  if not tags.source_video_id:
+    return False
+  entry = intake_lib.Entry(video_id=tags.source_video_id,
+                           extractor=DEFAULT_ARCHIVE_EXTRACTOR)
+  intake_lib.record_download(conn, entry, track_id)
+  return True

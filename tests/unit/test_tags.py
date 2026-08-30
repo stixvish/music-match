@@ -227,3 +227,26 @@ def test_reported_changes_match_the_file(audio_file: pathlib.Path) -> None:
   for field, (old_value, new_value) in changes.items():
     assert before[field] == old_value
     assert after[field] == new_value
+
+
+def test_a_file_with_the_core_fields_is_complete() -> None:
+  """What `reindex` uses to tell a lost database from an untagged library."""
+  assert fields.TrackTags(title="T", artist="A", album="B",
+                          year=2011).is_complete()
+
+
+def test_a_partially_tagged_file_is_not_complete() -> None:
+  """A title alone is not enough to skip matching."""
+  assert not fields.TrackTags(title="T").is_complete()
+
+
+def test_missing_required_names_the_gaps() -> None:
+  """Reporting which fields are absent is more useful than a bare no."""
+  missing = fields.TrackTags(title="T", artist="A").missing_required()
+  assert missing == ("album", "year")
+
+
+def test_completeness_does_not_demand_every_field() -> None:
+  """A track is fine without a lyricist; demanding one would rematch all."""
+  assert fields.TrackTags(title="T", artist="A", album="B",
+                          year=2011).lyricist is None

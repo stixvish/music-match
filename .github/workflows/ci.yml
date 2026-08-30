@@ -4,6 +4,12 @@ on:
   pull_request:
   push:
     branches: [main]
+  # The integration tests exist to catch a source changing its response
+  # shape underneath us. That does not happen on our schedule, so it is
+  # worth checking without waiting for someone to open a PR.
+  schedule:
+    - cron: "0 7 * * 1"
+  workflow_dispatch:
 
 jobs:
   checks:

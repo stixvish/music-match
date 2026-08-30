@@ -36,6 +36,11 @@ NUMERIC_FIELDS = (
 
 ALL_FIELDS = TEXT_FIELDS + NUMERIC_FIELDS
 
+# What a file needs before it is worth leaving alone. Not every target
+# field — a track can be perfectly usable without a lyricist — but enough
+# that re-matching it would be work for nothing.
+REQUIRED_FIELDS = ("title", "artist", "album", "year")
+
 
 @dataclasses.dataclass(frozen=True)
 class TrackTags:
@@ -81,6 +86,26 @@ class TrackTags:
   def is_empty(self) -> bool:
     """Returns whether every field is unset."""
     return not self.as_dict()
+
+  def is_complete(self) -> bool:
+    """Returns whether this file already carries usable metadata.
+
+    Used by `reindex` to tell a library that merely lost its database
+    from one that was never tagged. Deliberately not every target field:
+    a track is fine without a lyricist, and demanding one would send the
+    whole library back through matching.
+    """
+    present = self.as_dict()
+    return all(field in present for field in REQUIRED_FIELDS)
+
+  def missing_required(self) -> tuple[str, ...]:
+    """Returns the required fields this file does not have.
+
+    Returns:
+      The missing field names, in declaration order.
+    """
+    present = self.as_dict()
+    return tuple(field for field in REQUIRED_FIELDS if field not in present)
 
   def merged_with(self, other: "TrackTags") -> "TrackTags":
     """Fills this object's unset fields from another.

@@ -1548,3 +1548,127 @@ def test_a_failed_download_is_not_archived(
        str(db_path)])
   with connection.open_db(db_path) as conn:
     assert not dedup_intake.in_archive(conn, SUBMITTED)
+
+
+def test_reindex_rebuilds_the_index_from_files(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The recovery path: a library on disk, no database at all."""
+  config, db_path = intake_workspace(tmp_path)
+  audio = conftest.write_m4a(tmp_path / "yt-dlp" / "Artist - Song.m4a")
+  tag_io.write_tags(audio, fields.TrackTags(title="Song", artist="Artist"))
+  fake_fingerprints(monkeypatch, {"Artist - Song.m4a": BASE_VALUES})
+
+  result = runner.invoke(
+      main.app, ["reindex", "--sources",
+                 str(config), "--db",
+                 str(db_path)])
+  assert result.exit_code == 0
+  with connection.open_db(db_path) as conn:
+    assert queries.count_tracks(conn) == 1
+    row = conn.execute("SELECT fingerprint, tags_json FROM tracks").fetchone()
+  assert row["fingerprint"] is not None
+  assert "Song" in row["tags_json"]
+
+
+def test_reindex_rebuilds_the_download_archive(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The source id embedded at download time exists for exactly this.
+
+  Without it, losing the database means every previously downloaded link
+  looks new again and the whole library is re-fetched.
+  """
+  config, db_path = intake_workspace(tmp_path)
+  audio = conftest.write_m4a(tmp_path / "yt-dlp" / "Artist - Song.m4a")
+  tag_io.write_tags(audio,
+                    fields.TrackTags(title="Song", source_video_id="abc123"))
+  fake_fingerprints(monkeypatch, {"Artist - Song.m4a": BASE_VALUES})
+
+  runner.invoke(main.app,
+                ["reindex", "--sources",
+                 str(config), "--db",
+                 str(db_path)])
+  entry = intake_lib.Entry(video_id="abc123", extractor="youtube")
+  with connection.open_db(db_path) as conn:
+    assert dedup_intake.in_archive(conn, entry)
+
+
+def test_reindex_counts_already_tagged_files(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A library that lost its database is not one that was never tagged."""
+  config, db_path = intake_workspace(tmp_path)
+  complete = conftest.write_m4a(tmp_path / "yt-dlp" / "A - Done.m4a")
+  tag_io.write_tags(
+      complete,
+      fields.TrackTags(title="Done", artist="A", album="Album", year=2011))
+  bare = conftest.write_m4a(tmp_path / "yt-dlp" / "B - Bare.m4a")
+  tag_io.write_tags(bare, fields.TrackTags(title="Bare"))
+  fake_fingerprints(monkeypatch, {
+      "A - Done.m4a": BASE_VALUES,
+      "B - Bare.m4a": OTHER_VALUES,
+  })
+
+  result = runner.invoke(
+      main.app, ["reindex", "--sources",
+                 str(config), "--db",
+                 str(db_path)])
+  assert "already fully tagged: 1" in result.stdout
+
+
+def test_reindex_dry_run_writes_nothing(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A dry run reports the work and creates no rows."""
+  config, db_path = intake_workspace(tmp_path)
+  conftest.write_m4a(tmp_path / "yt-dlp" / "Artist - Song.m4a")
+  fake_fingerprints(monkeypatch, {"Artist - Song.m4a": BASE_VALUES})
+  result = runner.invoke(
+      main.app,
+      ["reindex", "--sources",
+       str(config), "--db",
+       str(db_path), "--dry-run"])
+  assert "would index 1" in result.stdout
+  with connection.open_db(db_path) as conn:
+    assert queries.count_tracks(conn) == 0
+
+
+def test_reindex_can_skip_fingerprinting(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Rebuilding the archive should not require chromaprint."""
+  config, db_path = intake_workspace(tmp_path)
+  audio = conftest.write_m4a(tmp_path / "yt-dlp" / "Artist - Song.m4a")
+  tag_io.write_tags(audio,
+                    fields.TrackTags(title="Song", source_video_id="abc123"))
+  monkeypatch.setattr(fp, "have_fpcalc", lambda: False)
+  result = runner.invoke(main.app, [
+      "reindex", "--sources",
+      str(config), "--db",
+      str(db_path), "--skip-fingerprints"
+  ])
+  assert result.exit_code == 0
+  with connection.open_db(db_path) as conn:
+    assert dedup_intake.in_archive(
+        conn, intake_lib.Entry(video_id="abc123", extractor="youtube"))
+
+
+def test_reindex_needs_fpcalc_unless_skipped(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Missing chromaprint is explained, with the way round it."""
+  config, db_path = intake_workspace(tmp_path)
+  conftest.write_m4a(tmp_path / "yt-dlp" / "Artist - Song.m4a")
+  monkeypatch.setattr(fp, "have_fpcalc", lambda: False)
+  result = runner.invoke(
+      main.app, ["reindex", "--sources",
+                 str(config), "--db",
+                 str(db_path)])
+  assert result.exit_code == 1
+
+
+def test_reindex_does_not_refingerprint_by_default(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Re-running is cheap; it is a recovery tool, not a rebuild-everything."""
+  config, db_path = intake_workspace(tmp_path)
+  conftest.write_m4a(tmp_path / "yt-dlp" / "Artist - Song.m4a")
+  fake_fingerprints(monkeypatch, {"Artist - Song.m4a": BASE_VALUES})
+  args = ["reindex", "--sources", str(config), "--db", str(db_path)]
+  runner.invoke(main.app, args)
+  second = runner.invoke(main.app, args)
+  assert "fingerprinted: 0" in second.stdout

@@ -218,6 +218,38 @@ def tracks_for_matching(
   yield from connection.execute(sql + " ORDER BY path", parameters)
 
 
+def record_snapshot(connection: sqlite3.Connection, track_id: int,
+                    tags_json: str) -> None:
+  """Stores what a file's tags currently are.
+
+  Distinct from `matched_tags_json`, which holds what they *should*
+  become. Keeping the two apart is what lets `reindex` tell a library
+  that lost its database from one that was never tagged.
+
+  Args:
+    connection: An open connection.
+    track_id: The track's row id.
+    tags_json: The file's current tags, JSON-encoded.
+  """
+  connection.execute(
+      "UPDATE tracks SET tags_json = ?, updated_at = datetime('now')"
+      " WHERE id = ?", (tags_json, track_id))
+
+
+def archive_size(connection: sqlite3.Connection) -> int:
+  """Returns how many source ids the download archive holds.
+
+  Args:
+    connection: An open connection.
+
+  Returns:
+    The row count.
+  """
+  row = connection.execute(
+      "SELECT count(*) AS n FROM download_archive").fetchone()
+  return int(row["n"])
+
+
 def tracks_with_matches(
     connection: sqlite3.Connection,
     source_name: str | None = None) -> Iterator[sqlite3.Row]:
