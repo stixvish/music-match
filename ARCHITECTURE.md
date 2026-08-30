@@ -73,8 +73,14 @@ for anything layers 1 and 2 missed.
 
 1. **Video-rip detection.** Check filename and embedded title for signals
    ("Official Video", "Music Video", etc.). Matches are quarantined to
-   `_review/possible-video-rip/` and skip the rest of the pipeline until
-   you confirm. Prevents wasting API calls matching a music video's audio.
+   `possible-video-rip/` under the configured `[review]` path and skip
+   the rest of the pipeline until you confirm. Prevents wasting API calls
+   matching a music video's audio.
+
+   Measured on this library: 113 of 2329 files carry a marker. Lyric
+   videos and visualisers are deliberately excluded — their audio is the
+   studio master, so flagging them would queue a tenth of the library for
+   no benefit.
 
 2. **Audio fingerprint** (Chromaprint / `fpcalc`). Local, no network,
    computed for **every** file. Serves two purposes:
