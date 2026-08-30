@@ -187,3 +187,7 @@ if `genre` starts reporting Essentia missing.
 `fetch-models` downloads the discogs-effnet embedding model and the
 genre_discogs400 classifier head into `models/`, which is gitignored. It
 skips files already present, so it is safe to re-run.
+
+Essentia's log output is suppressed while the model runs — it warns once
+per analysis frame, which is thousands of lines per library pass. Set
+`MUSIC_MATCH_ESSENTIA_LOGS=1` to restore it.

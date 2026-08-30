@@ -271,3 +271,92 @@ def test_result_from_frames_rejects_a_width_mismatch() -> None:
   """Frames that do not match the label list are an error, not a guess."""
   with pytest.raises(genre.GenreError):
     genre.result_from_frames([[0.1, 0.2]], CLASSES)
+
+
+class FakeLog:
+  """Stands in for `essentia.log`, which is a C++-backed singleton."""
+
+  def __init__(self) -> None:
+    """Starts with both streams on, as Essentia does."""
+    self.warningActive = True  # pylint: disable=invalid-name
+    self.infoActive = True  # pylint: disable=invalid-name
+
+
+class FakeEssentia:
+  """A stub `essentia` module carrying only the logging switches."""
+
+  def __init__(self) -> None:
+    """Creates the stub's log object."""
+    self.log = FakeLog()
+
+
+@pytest.fixture(name="fake_essentia")
+def fixture_fake_essentia(monkeypatch: pytest.MonkeyPatch) -> FakeEssentia:
+  """Installs a stub `essentia` module for the duration of a test.
+
+  Args:
+    monkeypatch: pytest's patching fixture.
+
+  Returns:
+    The stub, so a test can inspect its log switches.
+  """
+  import sys  # pylint: disable=import-outside-toplevel
+  stub = FakeEssentia()
+  monkeypatch.setitem(sys.modules, "essentia", stub)
+  monkeypatch.delenv(genre.ESSENTIA_LOGS_VAR, raising=False)
+  return stub
+
+
+def test_model_logging_is_silenced(fake_essentia: FakeEssentia) -> None:
+  """Essentia's predict algorithms log per frame, not per file.
+
+  Left on, a library-sized run buries its own progress output under
+  thousands of "No network created" lines.
+  """
+  with genre.quiet_essentia():
+    assert fake_essentia.log.warningActive is False
+    assert fake_essentia.log.infoActive is False
+
+
+def test_logging_state_is_restored(fake_essentia: FakeEssentia) -> None:
+  """Suppression is scoped, so it cannot leak into unrelated code."""
+  with genre.quiet_essentia():
+    pass
+  assert fake_essentia.log.warningActive is True
+  assert fake_essentia.log.infoActive is True
+
+
+def test_logging_is_restored_after_a_failure(
+    fake_essentia: FakeEssentia) -> None:
+  """An exception inside the block still restores the log streams."""
+  with pytest.raises(RuntimeError):
+    with genre.quiet_essentia():
+      raise RuntimeError("boom")
+  assert fake_essentia.log.warningActive is True
+
+
+def test_the_escape_hatch_leaves_logging_alone(
+    fake_essentia: FakeEssentia, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Setting the environment variable restores Essentia's own output."""
+  monkeypatch.setenv(genre.ESSENTIA_LOGS_VAR, "1")
+  with genre.quiet_essentia():
+    assert fake_essentia.log.warningActive is True
+
+
+@pytest.mark.parametrize("value,expected", [
+    ("1", True),
+    ("yes", True),
+    ("", False),
+    ("   ", False),
+])
+def test_escape_hatch_reads_the_environment(monkeypatch: pytest.MonkeyPatch,
+                                            value: str, expected: bool) -> None:
+  """A blank variable counts as unset, not as enabled."""
+  monkeypatch.setenv(genre.ESSENTIA_LOGS_VAR, value)
+  assert genre.essentia_logs_enabled() is expected
+
+
+def test_escape_hatch_defaults_off(monkeypatch: pytest.MonkeyPatch) -> None:
+  """Quiet is the default; the logs are opt-in."""
+  monkeypatch.delenv(genre.ESSENTIA_LOGS_VAR, raising=False)
+  assert genre.essentia_logs_enabled() is False

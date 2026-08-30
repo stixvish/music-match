@@ -125,6 +125,15 @@ childrens          hip_hop      stage_screen
 `genre index` walks the library and records a label per track, resumable
 the same way `scan` is. Roughly 1.3s per file.
 
+Essentia's own logging is silenced while the model runs: its TensorFlow
+algorithms emit `No network created, or last created network has been
+deleted...` *per analysis frame*, which buries the progress output under
+thousands of lines over a library-sized run. Set
+`MUSIC_MATCH_ESSENTIA_LOGS=1` to get it back when debugging. Two
+TensorFlow startup lines (`absl::InitializeLog`, `mlir_graph_optimization`)
+are emitted from C++ before any Python control exists and cannot be
+suppressed without also hiding real errors, so they stay.
+
 **How accurate is it?** Measured against tracks with known genres, the
 **top-level genre is right about three quarters of the time overall — but
 that number hides everything useful.** Accuracy tracks confidence closely:
