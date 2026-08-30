@@ -63,6 +63,19 @@ Bash access and nothing else here requires you specifically.
 
    Fill in real values. `.env` is gitignored and must never be committed.
 
+   Which key unlocks what: `DISCOGS_TOKEN` enables the Discogs source,
+   `SPOTIFY_CLIENT_ID` and `SPOTIFY_CLIENT_SECRET` enable Spotify, and
+   `ACOUSTID_API_KEY` is for the fingerprint lookup fallback. iTunes and
+   MusicBrainz need no key. A source without its credentials reports
+   itself unavailable rather than failing mid-run, so a partial `.env`
+   still works.
+
+   **`MUSICBRAINZ_USER_AGENT` should name you, not the placeholder.**
+   MusicBrainz requires a user agent identifying the client and a real
+   contact, and throttles generic ones. `.env.example` ships
+   `music-match/0.1.0 ( your-email@example.com )` — replace the address
+   with one you actually read.
+
 7. **Confirm your library is present.** Source folders are matched by
    name (`yt-dlp`, `beatport`), so the library can live anywhere as long
    as the folder structure is intact. Adjust paths in `sources.toml` if
