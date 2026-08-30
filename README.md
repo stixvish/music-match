@@ -11,8 +11,9 @@ Full design: [ARCHITECTURE.md](./ARCHITECTURE.md)
 ## Status
 
 Early development. In place: config loading, the SQLite schema, the tag
-read/write layer, audio fingerprinting with a duplicate scan, and local
-genre detection. Not yet: metadata matching, tag writing from sources,
+read/write layer, audio fingerprinting with a duplicate scan, local genre
+detection, and the four metadata sources with a probe tool for comparing
+them. Not yet: matching and confidence scoring, tag writing from sources,
 downloading, or the web UI. The commands below are the ones that actually
 exist.
 
@@ -53,7 +54,8 @@ Two TOML files, both committed, both edited by hand:
   a `[genres.<name>.fields]` table overrides it for individual fields
   where one source is reliably better (Discogs for `remixer`, say).
   `[genres.default]` is required — it is the fallback for any genre not
-  listed.
+  listed. It is tuned from real probe output rather than assumptions, and
+  every entry carries a comment recording what was measured.
 
 Credentials live in `.env`, never in the TOML files. See
 [`.env.example`](./.env.example) for the variables you need.
@@ -70,6 +72,7 @@ uv run music-match dedup                # report duplicate recordings
 uv run music-match genre show FILE      # what the model hears in one file
 uv run music-match genre index          # detect genres across the library
 uv run music-match genre summary        # what the library is made of
+uv run music-match probe FILE...        # compare all four metadata sources
 ```
 
 ### Finding duplicates
@@ -144,6 +147,50 @@ comes back `Rock---Pub Rock`, and melodic pop-rap is drawn to
 usable and the style as a hint — which is all this stage needs it to be,
 since precedence is keyed on the top level alone.
 
+### Metadata sources
+
+Four public databases are wired up, each behind the same interface:
+
+| Source | Auth | Reliably carries | Never carries |
+|---|---|---|---|
+| **discogs** | token | genre/style, `remixer`, `composer`, `mix_name`, label, catalogue no. | `isrc`, `release_date` |
+| **spotify** | client id + secret | `isrc`, `release_date`, track/disc numbers, 640px art | credits, genre |
+| **itunes** | none | `album`, `release_date`, track/disc numbers, coarse genre, art | `isrc`, credits |
+| **musicbrainz** | none (user agent) | artist credits, `track_total` | art; `isrc` only sometimes |
+
+Requests are rate limited per source (MusicBrainz allows one a second and
+enforces it), retried with backoff on 429 and 5xx, and cached for seven
+days under `.music-match/http-cache/` so re-running a probe is cheap.
+
+### Probing sources
+
+`probe` asks every source about the same tracks and prints a per-field
+comparison plus a coverage table. This is how `precedence.toml` gets
+tuned — from observed data rather than from guesses about which database
+ought to be better:
+
+```bash
+uv run music-match probe ~/Music/yt-dlp/*.m4a       # queries built from tags
+uv run music-match probe --artist X --title Y       # ad-hoc, no file needed
+```
+
+```
+  isrc
+    discogs      -
+    musicbrainz  -
+    spotify      GBDUW0600009
+    itunes       -
+
+=== coverage across 10 track(s) ===
+  field             discogs    musicbrainz    spotify       itunes
+  isrc                0/10         4/10        10/10         0/10
+  remixer             2/10         0/10         0/10         0/10
+```
+
+There is a `probe` skill in `.claude/skills/probe/` covering how to choose
+a sample and how to read the output — including the trap that coverage is
+not quality.
+
 Useful flags:
 
 - `config show --sources PATH --precedence PATH` — point at config files
@@ -166,6 +213,10 @@ Useful flags:
   for `scan`.
 - `genre fetch-models --models DIR` — put the models somewhere other than
   `./models`.
+- `probe --only discogs,spotify` — ask a subset of sources.
+- `probe --all-fields` — include fields no source answered.
+- `probe --no-cache` — bypass cached responses, for checking whether a
+  source's data has actually changed.
 
 ## Development
 

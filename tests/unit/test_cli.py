@@ -14,6 +14,8 @@ from music_match import __version__
 from music_match.cli import main
 from music_match.db import connection
 from music_match.db import queries
+from music_match.sources import base as source_base
+from music_match.sources import http
 from music_match.tagging import fields
 from music_match.tagging import fingerprint as fp
 from music_match.tagging import genre as genre_lib
@@ -651,3 +653,133 @@ def test_genre_index_survives_a_file_with_no_prediction(
   ])
   assert result.exit_code == 0
   assert "analysed 1, failed 1" in result.stdout
+
+
+class ProbeStub(source_base.MetadataSource):
+  """A source with a fixed answer, for testing the probe command."""
+
+  def __init__(self, name: str, tags: fields.TrackTags | None) -> None:
+    """Records the canned answer.
+
+    Args:
+      name: The source name.
+      tags: The tags to return, or None for no candidates.
+    """
+    super().__init__(http.HttpClient(user_agent="test"))
+    self.name = name
+    self._tags = tags
+
+  def is_available(self) -> bool:
+    """Returns True; credentials are not part of these tests."""
+    return True
+
+  def search(self,
+             query: source_base.SourceQuery,
+             limit: int = 3) -> list[source_base.SourceResult]:
+    """Returns the canned candidate.
+
+    Args:
+      query: Ignored.
+      limit: Ignored.
+
+    Returns:
+      The canned candidate, or none.
+    """
+    del query, limit
+    if self._tags is None:
+      return []
+    return [
+        source_base.SourceResult(source=self.name,
+                                 source_id="1",
+                                 tags=self._tags)
+    ]
+
+
+def fake_sources(monkeypatch: pytest.MonkeyPatch,
+                 answers: dict[str, fields.TrackTags | None]) -> None:
+  """Replaces the source registry with stubs.
+
+  Args:
+    monkeypatch: pytest's patching fixture.
+    answers: Source name to the tags it should return.
+  """
+  monkeypatch.setattr(main, "SOURCE_TYPES", dict.fromkeys(answers, None))
+  monkeypatch.setattr(
+      main,
+      "build_all",
+      lambda names=None:
+      [ProbeStub(name, answers[name]) for name in (names or tuple(answers))])
+
+
+def test_probe_compares_sources_field_by_field(
+    monkeypatch: pytest.MonkeyPatch) -> None:
+  """The per-track view shows each source's value for each field."""
+  fake_sources(
+      monkeypatch, {
+          "discogs": fields.TrackTags(title="Strobe", remixer="DJ Marky"),
+          "spotify": fields.TrackTags(title="Strobe", isrc="GB123"),
+      })
+  result = runner.invoke(main.app,
+                         ["probe", "--artist", "deadmau5", "--title", "Strobe"])
+  assert result.exit_code == 0
+  assert "DJ Marky" in result.stdout
+  assert "GB123" in result.stdout
+
+
+def test_probe_prints_a_coverage_table(monkeypatch: pytest.MonkeyPatch) -> None:
+  """The coverage table is what precedence is actually tuned on."""
+  fake_sources(
+      monkeypatch, {
+          "discogs": fields.TrackTags(title="Strobe"),
+          "spotify": fields.TrackTags(title="Strobe", isrc="GB123"),
+      })
+  result = runner.invoke(main.app, ["probe", "--title", "Strobe"])
+  assert "coverage across 1 track(s)" in result.stdout
+  assert "isrc" in result.stdout
+
+
+def test_probe_marks_missing_values(monkeypatch: pytest.MonkeyPatch) -> None:
+  """A source with no value for a field shows as absent, not blank."""
+  fake_sources(monkeypatch, {
+      "discogs": fields.TrackTags(title="Strobe"),
+      "spotify": None,
+  })
+  result = runner.invoke(main.app, ["probe", "--title", "Strobe"])
+  assert result.exit_code == 0
+  assert "-" in result.stdout
+
+
+def test_probe_reads_queries_from_files(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A file's own tags become the search query."""
+  audio = conftest.write_m4a(tmp_path / "track.m4a")
+  tag_io.write_tags(audio, fields.TrackTags(title="Strobe", artist="deadmau5"))
+  fake_sources(monkeypatch, {"spotify": fields.TrackTags(title="Strobe")})
+  result = runner.invoke(main.app, ["probe", str(audio)])
+  assert result.exit_code == 0
+  assert "track.m4a" in result.stdout
+
+
+def test_probe_skips_a_file_with_no_title(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """An untagged file has nothing to search on and is skipped."""
+  audio = conftest.write_m4a(tmp_path / "untagged.m4a")
+  fake_sources(monkeypatch, {"spotify": fields.TrackTags(title="X")})
+  result = runner.invoke(main.app, ["probe", str(audio)])
+  assert result.exit_code == 1
+
+
+def test_probe_needs_something_to_probe(
+    monkeypatch: pytest.MonkeyPatch) -> None:
+  """With no files and no terms, the command says what it needs."""
+  fake_sources(monkeypatch, {"spotify": fields.TrackTags(title="X")})
+  result = runner.invoke(main.app, ["probe"])
+  assert result.exit_code == 1
+
+
+def test_probe_rejects_an_unknown_source(
+    monkeypatch: pytest.MonkeyPatch) -> None:
+  """A misspelled --only names the sources that do exist."""
+  fake_sources(monkeypatch, {"spotify": fields.TrackTags(title="X")})
+  result = runner.invoke(main.app, ["probe", "--title", "X", "--only", "nope"])
+  assert result.exit_code == 1

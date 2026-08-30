@@ -1,26 +1,81 @@
 # Which metadata sources to query, per locally-detected genre — and,
-# where it matters, per individual field. Tune this with
-# `music-match probe` against real tracks rather than guessing; the probe
-# tool's whole purpose is finding which source is actually best for
-# which field, so precedence should reflect that granularity, not just
-# a single per-genre ranking.
+# where it matters, per individual field.
 #
 # `order` is the default fallback: fields not explicitly listed under
 # [genres.<name>.fields] use this order. Field overrides only need to
-# list where you've found a field-specific source is meaningfully better
-# or worse than the genre default — no need to repeat every field.
+# list where a source is meaningfully better or worse than the genre
+# default; the file is easier to reason about when it is short.
+#
+# TUNED FROM OBSERVED DATA, not from assumptions about which database
+# "should" be better. Re-tune with the probe skill (`music-match probe`)
+# when source quality shifts or the library grows into new genres. Every
+# comment below records what was measured, so it can be checked rather
+# than taken on faith.
+#
+# Coverage over a 10-track sample spanning the genres this library
+# actually holds (electronic, hip hop, pop, latin, rock):
+#
+#   field          discogs  musicbrainz  spotify  itunes
+#   isrc             0/10       4/10      10/10     0/10
+#   release_date     0/10       8/10      10/10    10/10
+#   genre           10/10       0/10       0/10    10/10
+#   remixer          2/10       0/10       0/10     0/10
+#   mix_name         3/10       0/10       0/10     0/10
+#   composer         2/10       0/10       0/10     0/10
+#   track_number     7/10       0/10      10/10    10/10
+#   disc_total       0/10       0/10       0/10    10/10
+#   album art       10/10       0/10      10/10    10/10
+#
+# Coverage is not quality: iTunes returned an album for every track but
+# named a soundtrack ("Iron Man 2") for AC/DC's Thunderstruck and
+# MusicBrainz named a radio sampler. That is why iTunes trails on album
+# despite perfect coverage.
 
 [genres.default]
-order = ["musicbrainz", "spotify", "itunes"]
+# Spotify leads on breadth: it was the only source with an ISRC for every
+# track, and it carries dates and track numbers that Discogs does not.
+# iTunes trails because of the compilation/soundtrack problem above.
+order = ["spotify", "musicbrainz", "itunes"]
+
+[genres.default.fields]
+# Neither Spotify nor MusicBrainz returned a genre at all (0/10 each).
+genre = ["itunes", "discogs"]
+# Only iTunes reports a disc total.
+disc_total = ["itunes"]
 
 [genres.electronic]
-order = ["discogs", "musicbrainz", "spotify"]
+# Discogs leads for electronic: it is the only source carrying remixer,
+# mix name and composer, it shares its taxonomy with the local genre
+# model, and it alone gives label and catalogue number.
+order = ["discogs", "spotify", "musicbrainz"]
 
 [genres.electronic.fields]
-remixer = ["discogs", "musicbrainz"]
-mix_name = ["discogs", "musicbrainz"]
-album = ["discogs", "musicbrainz"]
-isrc = ["musicbrainz", "spotify"]
+# Discogs is the only source that returned any of these, on any track.
+remixer = ["discogs"]
+mix_name = ["discogs"]
+composer = ["discogs"]
+lyricist = ["discogs"]
+# Discogs never returned an ISRC or a release date (0/10 each), so it
+# must not lead them however good the rest of its data is. This ordering
+# was previously ["musicbrainz", "spotify"] — the probe showed that
+# backwards, 10/10 against 4/10.
+isrc = ["spotify", "musicbrainz"]
+release_date = ["spotify", "itunes", "musicbrainz"]
 
-[genres.rnb]
+[genres.hip_hop]
+# About a third of this library. Credits matter less here than for
+# electronic, and Spotify's ISRC, date and track-number coverage is
+# stronger, so it leads; Discogs stays second for genre and styles.
+order = ["spotify", "discogs", "itunes"]
+
+[genres.hip_hop.fields]
+genre = ["discogs", "itunes"]
+
+[genres.funk_soul]
+# The local genre model emits "Funk / Soul" for what would colloquially
+# be R&B; there is no "R&B" label in its 400-class vocabulary. This entry
+# replaces an earlier [genres.rnb], which nothing could ever select.
 order = ["spotify", "musicbrainz", "itunes"]
+
+[genres.funk_soul.fields]
+genre = ["itunes", "discogs"]
