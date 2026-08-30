@@ -141,22 +141,36 @@ it's a meaningfully different posture than "Claude opens a PR and I look
 at it" — there's no longer a point where you're looking at it before it
 ships.
 
-## Note on Essentia
+## Essentia, for genre detection
 
-A prebuilt cp314 macOS-arm64 wheel exists for `essentia-tensorflow` as of
-dev1438, so this should install cleanly rather than compiling from
-source. It's still deliberately **not** in the main dependency list —
-install and verify it separately before wiring in genre detection (build
-order step 3):
+Genre detection (`music-match genre`) needs Essentia and about 20MB of
+model files. Both are **optional** — every other command works without
+them — so Essentia is deliberately not in `pyproject.toml`. That keeps
+`uv sync` and CI free of a 94MB wheel.
 
 ```bash
 uv pip install essentia-tensorflow
-python -c "import essentia.tensorflow"
+uv run music-match genre fetch-models
 ```
 
-**Run that second line, not just the install.** There's an open upstream
-issue where the import fails on macOS ARM despite `pip install`
-completing without error — a packaging bug, not something you'd have
-done wrong. If the import fails, fallbacks are an isolated older-Python
-subprocess for just this step, or a different local classifier (at the
-cost of losing the Discogs taxonomy match).
+Verify the install with:
+
+```bash
+uv run python -c "from essentia.standard import TensorflowPredictEffnetDiscogs"
+```
+
+**Not `import essentia.tensorflow`.** Earlier notes in this repo said to
+check that, citing an upstream macOS ARM packaging bug. That check was
+wrong: there is no `essentia.tensorflow` module in *any* Essentia build,
+so it fails on every platform whether or not anything is broken. The
+TensorFlow algorithms live in `essentia.standard`. Confirmed working
+here on Python 3.14.7, macOS 26.6 arm64, `essentia-tensorflow
+2.1b6.dev1438` — installed cleanly, imported, and ran real inference.
+
+`uv pip install` puts Essentia in the venv without recording it in
+`pyproject.toml`, so a later `uv sync` will remove it. Re-run the install
+if `genre` starts reporting Essentia missing.
+
+`fetch-models` downloads the discogs-effnet embedding model and the
+genre_discogs400 classifier head into `models/`, which is gitignored. It
+skips files already present, so it is safe to re-run.

@@ -88,14 +88,24 @@ for anything layers 1 and 2 missed.
      is cheap; it's the API lookup we defer.
 
 3. **Local genre detection** (Essentia, `discogs-effnet` model). Local, no
-   network. Two uses:
+   network. Three uses, and measured accuracy constrains each differently:
    - Selects which source-precedence list to query (detected "Deep House"
-     → Discogs first).
+     → Discogs first). Safe: this needs only the **top-level** genre,
+     which is ~87-91% right whenever confidence is above 0.25.
    - Acts as the **fallback genre tag** if no external source returns
-     genre data.
-   - Also a useful cross-check: if Essentia says House and the matched
-     release says Drum & Bass, that's a signal the *match* is wrong, not
-     just the genre.
+     genre data. Use the top-level genre and only above a confidence
+     floor — writing the full `Genre---Style` label would put
+     `Pop---K-pop` on an American rapper, which the model does.
+   - A cross-check: if Essentia says House and the matched release says
+     Drum & Bass, that's a signal the *match* is wrong. Only meaningful
+     when the detection was confident, or it will flag good matches.
+
+   **Measured, not assumed** (against tracks with known genres): top-level
+   genre is right ~22% of the time below 0.15 confidence, ~75% from
+   0.15-0.25, ~87% from 0.25-0.40, and ~91% above 0.40. The style is
+   noticeably weaker than the genre at every level. Both the label and its
+   confidence are stored in `tracks`; anything acting on a detected genre
+   must read both.
 
 4. **Source matching.** Query sources in the detected genre's precedence
    order (see below). Pull every target field plus album art.
@@ -354,26 +364,34 @@ that format is undocumented and corrupting it would be unrecoverable.
 run over ~2000 tracks needs backoff and resumability so a partial run
 isn't wasted work.
 
-**Essentia on Python 3.14.** A prebuilt cp314 macOS-arm64 wheel exists
-for `essentia-tensorflow` as of dev1438, so this is no longer the
-source-compile risk it was on earlier Python versions. Two things still
-worth verifying, not assuming, before build order step 3:
+**Essentia on Python 3.14 — resolved, and the risk note was wrong.**
+Verified working: `essentia-tensorflow 2.1b6.dev1438` installs from a
+prebuilt cp314 macOS-arm64 wheel, imports, and runs real inference on
+Python 3.14.7 / macOS 26.6 arm64.
 
-- There's an open upstream issue where `essentia.tensorflow` fails to
-  import on macOS ARM (`ModuleNotFoundError`) despite `pip install`
-  completing successfully — a packaging bug independent of Python
-  version. Run `python -c "import essentia.tensorflow"` immediately
-  after install, not just `pip install` exiting cleanly.
-- 3.14 wheel coverage across the rest of the dependency tree
-  (`pydantic-core`, `uvicorn`, `starlette`, etc.) looked solid when
-  checked, but two independent readiness trackers disagreed with each
-  other on several secondary packages — meaning the ecosystem is still
-  settling, not fully uniform yet. Treat the first `uv sync` as the real
-  test of this decision, not a formality.
+The "open upstream issue where `essentia.tensorflow` fails to import on
+macOS ARM" recorded here was a misreading. **There is no
+`essentia.tensorflow` module in any Essentia build** — the TensorFlow
+algorithms are exposed through `essentia.standard`
+(`TensorflowPredictEffnetDiscogs`, `TensorflowPredict2D`). That import
+fails everywhere, working install or not, so it was never evidence of a
+packaging bug. The real check is:
 
-If either check fails: fallbacks are an isolated older-Python subprocess
-for just the Essentia step, or a different local classifier (at the cost
-of losing the Discogs taxonomy match).
+```bash
+python -c "from essentia.standard import TensorflowPredictEffnetDiscogs"
+```
+
+The rest of the dependency tree resolved without trouble, so the first
+`uv sync` did settle the 3.14 question as expected.
+
+Essentia stays **out of `pyproject.toml`** deliberately: it is a 94MB
+wheel needed by one optional command, and keeping it out means CI and a
+default `uv sync` do not pay for it. Genre detection reports what to
+install when it is absent.
+
+The fallbacks that were held in reserve — an isolated older-Python
+subprocess, or a different local classifier at the cost of losing the
+Discogs taxonomy match — are not needed.
 
 ---
 
