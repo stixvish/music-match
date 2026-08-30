@@ -17,8 +17,14 @@ def upsert_track(
     source_name: str,
     fingerprint: str | None = None,
     duration_seconds: float | None = None,
+    detected_genre: str | None = None,
+    genre_confidence: float | None = None,
 ) -> int:
   """Records a track, updating it if the path is already known.
+
+  Every optional column is coalesced rather than overwritten, so a caller
+  that knows only one of them — the fingerprint scan, or the genre pass —
+  fills in its own field without clearing the others.
 
   Args:
     connection: An open connection.
@@ -26,20 +32,31 @@ def upsert_track(
     source_name: The configured source folder it belongs to.
     fingerprint: Its encoded fingerprint, if computed.
     duration_seconds: Its duration, if known.
+    detected_genre: Its locally-detected genre label, if computed.
+    genre_confidence: How strongly the model backed that label. Stored
+      alongside it because the label alone is not worth much — see
+      db.schema.
 
   Returns:
     The track's row id.
   """
   cursor = connection.execute(
-      "INSERT INTO tracks (path, source_name, fingerprint, duration_seconds)"
-      " VALUES (?, ?, ?, ?)"
+      "INSERT INTO tracks"
+      "   (path, source_name, fingerprint, duration_seconds, detected_genre,"
+      "    genre_confidence)"
+      " VALUES (?, ?, ?, ?, ?, ?)"
       " ON CONFLICT(path) DO UPDATE SET"
       "   source_name = excluded.source_name,"
       "   fingerprint = coalesce(excluded.fingerprint, tracks.fingerprint),"
       "   duration_seconds ="
       "     coalesce(excluded.duration_seconds, tracks.duration_seconds),"
+      "   detected_genre ="
+      "     coalesce(excluded.detected_genre, tracks.detected_genre),"
+      "   genre_confidence ="
+      "     coalesce(excluded.genre_confidence, tracks.genre_confidence),"
       "   updated_at = datetime('now')"
-      " RETURNING id", (str(path), source_name, fingerprint, duration_seconds))
+      " RETURNING id", (str(path), source_name, fingerprint, duration_seconds,
+                        detected_genre, genre_confidence))
   row = cursor.fetchone()
   return int(row["id"])
 
@@ -110,6 +127,48 @@ def fingerprinted_paths(connection: sqlite3.Connection) -> set[str]:
   rows = connection.execute(
       "SELECT path FROM tracks WHERE fingerprint IS NOT NULL").fetchall()
   return {row["path"] for row in rows}
+
+
+def genre_tagged_paths(connection: sqlite3.Connection) -> set[str]:
+  """Returns the paths of tracks that already have a detected genre.
+
+  Used to make the genre pass resumable, the same way `fingerprinted_paths`
+  does for the fingerprint scan.
+
+  Args:
+    connection: An open connection.
+
+  Returns:
+    The paths, as stored.
+  """
+  rows = connection.execute(
+      "SELECT path FROM tracks WHERE detected_genre IS NOT NULL").fetchall()
+  return {row["path"] for row in rows}
+
+
+def detected_genre_counts(
+    connection: sqlite3.Connection,
+    minimum_confidence: float = 0.0) -> list[tuple[str, int, float]]:
+  """Summarises how many tracks fell into each detected genre.
+
+  Args:
+    connection: An open connection.
+    minimum_confidence: Ignore labels the model backed less strongly than
+      this.
+
+  Returns:
+    (label, count, mean confidence) triples, most common first.
+  """
+  rows = connection.execute(
+      "SELECT detected_genre AS label, count(*) AS n,"
+      "       avg(coalesce(genre_confidence, 0)) AS mean"
+      " FROM tracks"
+      " WHERE detected_genre IS NOT NULL"
+      "   AND coalesce(genre_confidence, 0) >= ?"
+      " GROUP BY detected_genre ORDER BY n DESC, label",
+      (minimum_confidence,)).fetchall()
+  return [(str(row["label"]), int(row["n"]), float(row["mean"])) for row in rows
+         ]
 
 
 def move_track(connection: sqlite3.Connection, track_id: int,

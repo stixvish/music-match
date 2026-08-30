@@ -7,13 +7,19 @@ have been marked as never going to match.
 
 Album art is deliberately *not* stored here. Covers are content-addressed
 files under `.music-match/art-store/<sha256>.jpg`; a `tag_history` row for
-`field = 'album_art'` holds the hash, not the bytes. Storing 640x640 JPEGs
+`field = 'album_art'` holds the hash, not the bytes.
+
+`genre_confidence` sits beside `detected_genre` because the label on its
+own is not worth much: measured against known tracks, the model's
+top-level genre is right about 22% of the time below 0.15 confidence and
+about 91% above 0.40. Anything deciding what to do with a detected genre
+needs both numbers. Storing 640x640 JPEGs
 as BLOBs across 2000 tracks and multiple revisions each would bloat the
 database and slow every query that touches the table, including ones with
 nothing to do with art.
 """
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 TABLES = ("tracks", "tag_history", "download_archive", "wont_match")
 
@@ -34,6 +40,7 @@ CREATE TABLE IF NOT EXISTS tracks (
   fingerprint      TEXT,
   duration_seconds REAL,
   detected_genre   TEXT,
+  genre_confidence REAL,
   source_video_id  TEXT,
   tags_json        TEXT,
   match_status     TEXT    NOT NULL DEFAULT 'pending'
@@ -73,6 +80,13 @@ CREATE TABLE IF NOT EXISTS wont_match (
   marked_at TEXT NOT NULL DEFAULT (datetime('now'))
 )
 """
+
+# Applied in order to bring an existing database up to SCHEMA_VERSION.
+# Keyed by the version being upgraded *from*. A database created fresh
+# already has every column, so these only run on one that predates them.
+MIGRATIONS: dict[int, tuple[str, ...]] = {
+    1: ("ALTER TABLE tracks ADD COLUMN genre_confidence REAL",),
+}
 
 SCHEMA_STATEMENTS = (
     _TRACKS,
