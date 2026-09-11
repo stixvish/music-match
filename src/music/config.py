@@ -118,6 +118,8 @@ def load(config_path: Path | None = None, env_path: Path | None = None) -> Confi
       "DISCOGS_TOKEN",
       "SPOTIFY_CLIENT_ID",
       "SPOTIFY_CLIENT_SECRET",
+      "BEATPORT_CLIENT_ID",
+      "BEATPORT_CLIENT_SECRET",
     )
     if os.environ.get(k)
   }

@@ -27,5 +27,12 @@ token = ""                      # https://www.discogs.com/settings/developers
 client_id = ""                  # https://developer.spotify.com/dashboard
 client_secret = ""
 
+[sources.beatport]
+# ranked first for genre on electronic (SPEC.md §7). credentials are issued by
+# beatport, not self-serve: request them at
+# https://partnerportal.beatport.com/hc/en-us/requests/new ("Other Question Or
+# Concern"), asking for the client_credentials grant.
+client_id = ""
+client_secret = ""
+
 # itunes search api needs no credentials.
-# beatport has no public api; deferred to v2 (SPEC.md §3).
