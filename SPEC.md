@@ -197,13 +197,30 @@ Selection, among releases containing this recording:
    `anniversary`, `complete`, `extended`.
 
 From the chosen release, atomically: `album`, `album_artist`, `track_number`,
-`disc_number`.
+`disc_number`. If the deluxe edition is chosen, the **deluxe edition's** track
+and disc numbers are used — they are the numbering that matches the album the
+track is filed under.
 
-**Dates are the exception and must not follow the release.** A deluxe edition
-often ships a year after the original, and §7 wants the *original* release date.
-So `year` and `release_date` come from the **release-group's first release
-date**, not from the selected release. A 2011 track reissued as a 2012 deluxe
-stays a 2011 track that happens to be catalogued under the deluxe edition.
+**Dates do not follow the chosen release.** `year` and `release_date` are the
+**earliest release date of the recording, across every release it appears on** —
+singles and EPs included, not just albums.
+
+This matters because most singles precede their album:
+
+```
+"Give Me Everything"
+  single       2011-03-18   <- release_date / year
+  Planet Pit   2011-06-17
+  Planet Pit (Deluxe)  2011-06-17   <- album, track_number, disc_number
+```
+
+Taking the album's date would date the song three months late, and taking a
+deluxe reissue's date could be a year or more out. The album fields describe
+*where the track is filed*; the date describes *when the music came out*. They
+are answers to different questions and must be sourced separately.
+
+Guard against bad catalogue data: ignore dates before 1900 or in the future, and
+prefer a date with full day precision over a bare year when both exist.
 
 **Rate limiting and caching** (§13) are part of this layer, not an afterthought:
 every source adapter backs off exponentially and every response is cached to
