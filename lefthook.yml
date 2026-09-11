@@ -21,5 +21,5 @@ commit-msg:
     conventional:
       # spec.md rule: conventional, lowercase, under 70 chars, no body
       run: |
-        head -1 {1} | grep -qE '^(feat|fix|docs|refactor|test|chore)(\([a-z-]+\))?: .{1,60}$' \
+        head -1 {1} | grep -qE '^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([a-z-]+\))?: .{1,60}$' \
           || { echo "bad subject: conventional, lowercase, <70 chars"; exit 1; }
