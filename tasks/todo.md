@@ -56,7 +56,7 @@
 
 ## phase 3 — resolution is real
 
-- [ ] **t18** acoustid fingerprinting → stable id (needs api key)
+- [x] **t18** acoustid fingerprinting → stable id (needs api key)
 - [ ] **t19** discogs adapter + cassettes
 - [ ] **t20** spotify adapter + cassettes
 - [ ] **t21** itunes search adapter + cassettes (artwork)

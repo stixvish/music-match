@@ -249,6 +249,31 @@ class MusicBrainz:
     top, releases = self._best_recording(recordings, identity)
     if top is None:
       return []
+    return self._candidates(top, releases, identity)
+
+  def candidates_from(
+    self, recording: dict, identity: Identity
+  ) -> Sequence[FieldCandidate]:
+    """Build candidates from an already-fetched recording.
+
+    Used by the fingerprint path, which arrives with an mbid rather than a
+    search result.
+
+    Args:
+      recording: A full recording dict.
+      identity: What we know so far.
+
+    Returns:
+      Candidates.
+    """
+    return self._candidates(recording, self.releases_for(recording), identity)
+
+  def _candidates(
+    self,
+    top: dict,
+    releases: list[ReleaseInfo],
+    identity: Identity,  # noqa: ARG002 - kept for symmetry with the callers
+  ) -> Sequence[FieldCandidate]:
     candidates = [
       FieldCandidate(field="title", value=str(top.get("title", "")), source=NAME),
       FieldCandidate(

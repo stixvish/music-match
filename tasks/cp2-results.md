@@ -59,3 +59,21 @@ judged against an end-state bar.
 
 that is a flaw in `tasks/plan.md`, not a result. the options are in the handover
 note; this needs a human decision rather than another round of scorer changes.
+
+
+## readings after each change
+
+| stage | reading | change |
+|---|---|---|
+| text only, no normalisation | 55% | baseline |
+| + normalisation (cp2 as first run) | 32.3% | scorer bug: same-recording rivals |
+| + rival fix | 61.5% | bug fix, no threshold moved |
+| + collaborator/bonus-track normalisation | 62.5% | `no_match` 7 → 5 |
+| **+ acoustid fingerprinting** | **77.1%** | **above the cp4 proceed bar** |
+
+acoustid rescued **30 of the 36** tracks musicbrainz could not auto-accept — an
+83% rescue rate on failures, including bollywood, where text search is weakest.
+
+still to come before cp4: discogs, spotify, itunes, url override, and audio
+re-downloaded as art tracks (which should convert the remaining duration
+mismatches).

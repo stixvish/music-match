@@ -21,9 +21,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
+from pathlib import Path as _Path  # noqa: E402
+
 from music import config, db  # noqa: E402
 from music.identify import confidence, should_auto_accept  # noqa: E402
 from music.normalise import normalise  # noqa: E402
+from music.resolve import Resolver  # noqa: E402
+from music.sources.acoustid import AcoustId  # noqa: E402
 from music.sources.base import Identity  # noqa: E402
 from music.sources.musicbrainz import MusicBrainz  # noqa: E402
 
@@ -79,6 +83,9 @@ def main() -> int:
   conn = db.connect(cfg.paths.database)
   db.migrate(conn)
   source = MusicBrainz(conn)
+  key = cfg.credentials.get("ACOUSTID_API_KEY", "")
+  resolver = Resolver(conn, source, AcoustId(conn, key) if key else None)
+  audio_dir = _Path.home() / "Music" / "yt-dlp"
 
   stats: dict[str, collections.Counter] = collections.defaultdict(collections.Counter)
   total = collections.Counter()
@@ -94,7 +101,8 @@ def main() -> int:
       duration_s=float(row["dur"]) if row.get("dur") else None,
       artist_full=cleaned.artist_full,
     )
-    match, _ = source.evaluate(identity)
+    audio = audio_dir / row["file"]
+    match = resolver.resolve(identity, audio if audio.exists() else None).match
     bucket = (
       "auto"
       if should_auto_accept(match)
