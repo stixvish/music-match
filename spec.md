@@ -1,16 +1,16 @@
-# Music Metadata Pipeline — Specification
+# music metadata pipeline — spec
 
 **Status:** format probe COMPLETE · AIFF confirmed · no open probe items
 **Last updated:** 2026-09-11
 
-## 1. Problem
+## 1. problem
 
 ~2,300 tracks sourced from YouTube via yt-dlp, in M4A/AAC. The container cannot
 hold the metadata fields required for DJ use, and identity/credits are
 incomplete. Rekordbox 7 and Serato DJ Lite must both display a complete,
 correct tag set.
 
-## 2. Goals
+## 2. goals
 
 - Every track carries a complete tag set in **Rekordbox**, and as complete a set
   as **Serato DJ Lite** can display (it has no columns for album artist, mix
@@ -20,7 +20,7 @@ correct tag set.
 - Metadata is regenerable: improving the resolver re-tags the library for free.
 - Manual review stays within a **5-hour total budget** (§9).
 
-## 3. Non-goals (v1)
+## 3. non-goals (v1)
 
 - Tidal, Bandcamp, Apple Music API — gated or paid. Deferred to v2.
 - Cue points, beatgrids, crates — owned by the DJ apps, not this tool.
@@ -30,7 +30,7 @@ correct tag set.
   Their tags are deliberately discarded (§4, Option C).
 - 100% composer/lyricist coverage — best-effort, never blocking.
 
-## 4. Verified findings (evidence base)
+## 4. verified findings (evidence base)
 
 | Finding | Evidence |
 |---|---|
@@ -39,7 +39,9 @@ correct tag set.
 | 75.4% carry ISRC; 72.2% complete on core 8 fields | tag coverage scan |
 | M4A cannot hold remixer/label/original artist/mix name | Pioneer metadata spec |
 | 256 kbps reachable via `web_music` + Premium cookies | downloaded & verified 256012 bps |
-| itag 141 (AAC, 44.1 kHz) preferred over 774 (Opus, 48 kHz + 20 kHz lowpass) | format listing |
+| **Opus 774 retains MORE ultrasonic content than AAC 141** — the steep roll-off is AAC's 44.1 kHz Nyquist wall, not an Opus lowpass | spectral measurement, same track, both streams |
+| Neither difference is audible (all of it above 20 kHz); both are transparent at 256 kbps | — |
+| itag 141 chosen for **sample-rate fidelity** (44.1 kHz native, matching the master; Opus was resampled 44.1→48 by YouTube) and because AIFF at 48 kHz is 8.8% larger | measurement + arithmetic |
 | 117 files are music-video rips (channel name as artist, inflated duration) | filename/tag pattern scan |
 | Library is 85% non-electronic (hip-hop/pop/R&B/Bollywood) | genre distribution |
 | essentia-tensorflow works on Python 3.14.7; emits Discogs taxonomy | installed, ran on library files |
@@ -55,7 +57,7 @@ correct tag set.
 | MusicBrainz misses remixes/edits (`(LEFTI REMIX)`, `- H.K.G Mix`) | same sample |
 | Text match can confidently return the wrong *version* (`SMASH!` → `SMASH! (instrumental)`) | same sample |
 
-## 5. Architecture
+## 5. architecture
 
 Source of truth is **SQLite**. Audio files are a regenerable *projection* of it.
 Re-tagging never requires re-downloading or re-resolving.
@@ -82,20 +84,22 @@ directly and skips resolution.
 Every stage is **resumable**: each track's stage marker is a DB row, so a crash
 at track 1,800 of 2,329 resumes at 1,800.
 
-## 6. Pipeline stages
+## 6. pipeline stages
 
 1. **Enumerate** — playlist → video IDs + title/channel/duration.
 2. **Dedup** — skip anything already owned (§8). Runs pre-download.
 3. **Download** — yt-dlp Python API (not subprocess: structured info dict).
-   Format chain `141/774/140/251`; `web_music` client; cookies from file.
+   Format chain `141/774/140/251`; `web_music` client; cookies read from
+   the browser at runtime (§13) — no credential file exists.
 4. **Quality gate** — hard-fail below 256 kbps rather than silently degrade.
 5. **Normalise** — clean artist/title before any query. Strip `VEVO` suffixes,
    a redundant leading `Artist - `, `(Official Video)` / `(Lyric Video)` /
    `(Visualizer)`, and trailing `feat.` clauses; take the primary artist only.
    **Measured worth +31pp of resolution accuracy (§4) — the highest-leverage
    stage in the pipeline.**
-6. **Classify** — Essentia `genre_discogs400` → `Genre---Style`. Runs *before*
-   resolution; its output routes precedence (§7).
+6. **Classify** — Essentia `genre_discogs400`. **Only the top-level genre is
+   used** (the part before `---`), to route precedence. The `Style` half is
+   unreliable and is never written as a tag (§7).
 7. **Resolve identity** — AcoustID fingerprint → normalised text search →
    manual URL override. Emits a confidence score (§12). Penalise version
    variants (`(instrumental)`, `(sped up)`) the query did not ask for.
@@ -103,11 +107,11 @@ at track 1,800 of 2,329 resumes at 1,800.
 9. **Transcode** — ffmpeg → **AIFF** (`-c:a pcm_s16be`), native sample rate
    (no resampling). 16-bit is correct: the source is lossy AAC.
 10. **Tag** — ID3v2.4 frames (§10).
-11. **Publish** — write to the layout in §14, record provenance. Tracks below
+11. **Publish** — canonical naming + layout (§14), record provenance. Tracks below
     the confidence threshold are **not published**; they go to the review
     queue (§9) and stay out of the library until resolved.
 
-## 7. Sources and precedence
+## 7. sources and precedence
 
 **v1 sources (all free, no paid signup):** MusicBrainz, AcoustID, Discogs,
 Spotify, iTunes Search API, local Essentia classifier. Beatport behind a
@@ -136,8 +140,14 @@ Genre family comes from the *local* classifier, not from a source. This breaks
 the circular dependency where you would need genre to pick the precedence
 table, but genre is itself one of the contested fields.
 
+**The classifier is a router, not a genre source.** Its `Style` output (the
+half after `---`) is not trustworthy — it splits near-identical tracks across
+`Trap` / `Cloud Rap` / `Pop Rap` with low, uncalibrated confidence. Only the
+**top-level genre** is used, and only to pick the precedence table. The genre
+*tag* always comes from a real source.
+
 **Six genre families**, taken from the Discogs top-level genre (the part before
-`---` in the classifier's `Genre---Style` output) and collapsed:
+`---`) and collapsed:
 
 `electronic` · `hip-hop` · `pop` · `r&b-soul` · `world` · `other`
 
@@ -150,7 +160,7 @@ table, but genre is itself one of the contested fields.
 |---|---|
 | artist / title / mix name | Beatport (electronic) → Discogs → MusicBrainz → Spotify |
 | featured vs. collaborating artists | **MusicBrainz** (models artist-credit; Spotify flattens) |
-| genre / style | Essentia + Discogs Style → Beatport |
+| genre / style | Discogs Style → Beatport → MusicBrainz. **Essentia is not a genre source** — see below |
 | label / catalog no. | Discogs → Beatport |
 | release date | MusicBrainz release-group (original, not reissue) → Spotify |
 | artwork | iTunes Search API |
@@ -162,7 +172,7 @@ table, but genre is itself one of the contested fields.
 every source adapter backs off exponentially and every response is cached to
 disk, because resolution will be re-run many times as precedence is tuned.
 
-## 8. Identity and deduplication
+## 8. identity and deduplication
 
 Stored per file: `video_id`, `isrc`, `chromaprint`, `acoustid_id`,
 `musicbrainz_recording_id`, `sha256`, `duration`, normalized `artist+title`.
@@ -194,7 +204,7 @@ still tied, keep the incumbent. Always log the decision.
 
 Prefer art tracks at *search* time; detection is the safety net.
 
-## 9. Review budget — 5 hours total
+## 9. review budget — 5 hours total
 
 | Activity | Budget | Rate | Volume |
 |---|---|---|---|
@@ -232,7 +242,7 @@ later against the DB.
 disputed field, present candidate values side by side with source order
 randomized; derive per-(field × family) weights from the choices.
 
-## 10. Format probe — results
+## 10. format probe — results
 
 **Outcome: AIFF, not FLAC.** Rekordbox 7 renders every required field from
 AIFF/ID3v2.4. FLAC silently drops five, two of which (album artist, release
@@ -241,7 +251,7 @@ spellings were tried per failing field, so this is reader coverage, not a
 key-naming mistake. AIFF also plays on every CDJ generation; FLAC requires
 NXS2 or newer. Cost of the reversal: 79.4 GB instead of 57.7 GB.
 
-### Confirmed ID3v2.4 frame map (Rekordbox 7)
+### confirmed ID3v2.4 frame map (Rekordbox 7)
 
 | Field | Frame | Field | Frame |
 |---|---|---|---|
@@ -256,7 +266,7 @@ NXS2 or newer. Cost of the reversal: 79.4 GB instead of 57.7 GB.
 
 Each field was written with exactly one frame, so display confirms the mapping.
 
-### Confirmed by screenshot
+### confirmed by screenshot
 
 - `TDRC` → Rekordbox **Year**; `TDRL` → Rekordbox **Release Date**. Write both.
 - Artwork (`APIC`) renders in Rekordbox. AIFF bitrate 1,411.2 kbps = correct
@@ -273,18 +283,18 @@ Each field was written with exactly one frame, so display confirms the mapping.
   until **Reload Tag** — confirming that Rekordbox caches tags per path and
   will not re-read on reimport. Operational rule: **tag before import.**
 
-### FLAC key map (recorded for a possible space-constrained USB build)
+### fLAC key map (recorded for a possible space-constrained USB build)
 
 `REMIXER` (not MIXARTIST) · `LABEL` · `INITIALKEY` (not KEY) · `BPM` (not
 TEMPO) · `DATE` · `GROUPING` · comment: Rekordbox reads `COMMENT`, Serato reads
 `DESCRIPTION` — write both.
 
-### Capacity note
+### capacity note
 
 AIFF library ≈ 79.4 GB against a 64 GB USB: ~80% fits. Accepted. Fallback if it
 bites: AIFF master library, FLAC/320k subset generated for the stick.
 
-## 11. Data model
+## 11. data model
 
 SQLite. Audio files are a **projection** of this; re-tagging never requires
 re-downloading or re-resolving.
@@ -313,7 +323,7 @@ CREATE TABLE track (
   stage               TEXT NOT NULL,    -- normalise|classify|resolve|arbitrate|transcode|tag|publish
   status              TEXT NOT NULL,    -- pending|auto|review|published|failed|skipped
   genre_family        TEXT,             -- routes precedence
-  genre_style         TEXT,             -- full 'Genre---Style'
+  genre_style         TEXT,             -- full 'Genre---Style', diagnostic only; never tagged
   is_video_rip        INTEGER DEFAULT 0,
   identity_confidence REAL,
   norm_artist TEXT, norm_title TEXT,    -- post-normalisation, what we query with
@@ -367,7 +377,7 @@ CREATE TABLE api_cache (
 `field_candidate` is append-only on purpose: when a tag looks wrong six months
 from now, the full set of what every source said is still there to inspect.
 
-## 12. Confidence and arbitration
+## 12. confidence and arbitration
 
 **Identity confidence gates entry, not ranking.** One threshold, one ordered
 list. If a field is wrong you can point at exactly which source supplied it.
@@ -390,7 +400,7 @@ Version-variant guard: penalise a candidate whose title adds `(instrumental)`,
 for it. Measured need — a text match returned `SMASH! (instrumental)` at full
 confidence with matching duration (§4).
 
-## 13. Operational concerns
+## 13. operational concerns
 
 **Credentials.** This repository is public. There is **no credential file**:
 yt-dlp reads cookies from Chrome at runtime via `--cookies-from-browser`. A
@@ -422,14 +432,35 @@ untouched until the new library is verified end to end.
 **Dependencies.** `yt-dlp` (needs a JS runtime — Deno — for some formats),
 `ffmpeg`, `essentia-tensorflow` (cp314 wheels), `mutagen`, `chromaprint/fpcalc`.
 
-## 14. Output layout
+## 14. output layout
 
 ```
-Library/
+library/
   <genre-family>/
-    <Artist>/
-      <Artist> - <Title> (<Mix>).aiff
+    <artist>/
+      <Artist> - <Title> (ft. <Guest>) [<Remixer> Remix].aiff
 ```
+
+### canonical naming
+
+House style, applied identically to the `TIT2` tag and the filename so search
+behaves the same in Finder, Rekordbox and Serato:
+
+| Rule | Example |
+|---|---|
+| Features use **`ft.`**, never `feat.`, in parentheses | `Mood (ft. iann dior)` |
+| Remixes and edits use **square brackets** | `Delilah [Tom Santa Remix]` |
+| Both may co-occur, features first | `Title (ft. Guest) [Someone Remix]` |
+| Mix/remix designation is never dropped | — |
+
+> **Two different normalisations, do not conflate them.** §6.5 *query*
+> normalisation strips everything down to bare artist/title so sources can be
+> matched. This is *canonical output* formatting, applied after arbitration to
+> whatever the winning source returned. One is for machines, one is for you.
+
+Filesystem-illegal characters (`/`, `:`) are replaced; the tag keeps the true
+value. If two tracks collide on path, a ` (2)` suffix is appended and both are
+flagged for review as probable duplicates.
 
 Six families (§7). Filename keeps the mix/remix designation — losing it is
 worse than having no tag, since that is how a DJ searches. Album-based
@@ -439,7 +470,54 @@ match how they would be browsed, and the same holds for compilations.
 Genre-first foldering also makes USB subsetting a folder copy, which matters at
 79.4 GB against a 64 GB stick (§10).
 
-## 15. Milestones
+## 15. web ui
+
+A local web app (localhost, no auth) is the only human interface. It replaces
+the three separate surfaces earlier drafts implied — review queue, elicitation,
+and manual override — with one tool.
+
+### why it exists
+
+**Auto-accept will be wrong sometimes.** §9 projects ~85% auto-accept at
+98–99% precision, which means roughly **25–35 tracks land in the library with a
+wrong field and no flag on them.** Confidence thresholds cannot fix this: a
+confident wrong match is exactly the case that does not reach review. The only
+real remedy is making correction cheap and always available, on any track, at
+any time — not just on the ones the pipeline doubted.
+
+### modes
+
+| Mode | Purpose |
+|---|---|
+| **review queue** | Work through `review_queue`: low confidence, no match, video rip, duplicate. |
+| **metadata editor** | Open *any* track — including published ones — and edit any field directly. |
+| **url override** | Paste a Spotify/MusicBrainz/Discogs/Beatport link; identity resolves exactly. |
+| **elicitation** | Calibration mode (§9): candidate values side by side, source order randomised, choices populate the `precedence` table. |
+
+### requirements
+
+- **Audio preview.** Non-negotiable for review — the common failure is a
+  plausible-looking match that is the wrong recording. You have to hear it.
+- **Provenance on every field.** Show which source supplied the value and what
+  the alternatives were, read straight from `field_candidate`. A wrong tag
+  should be one click from *why*.
+- **Edits are sticky.** A manual edit writes `resolved_field.decided_by =
+  'manual'` and is **never** overwritten by a later resolution run. Re-running
+  the resolver must be safe forever; that property is what makes the DB-as-
+  source-of-truth design worth having.
+- **Editing re-tags the file.** Save updates the DB, then re-emits ID3 to the
+  AIFF and renames/moves it if the canonical name changed (§14). Because
+  Rekordbox caches tags per path (§10), the UI must surface a **Reload Tag**
+  reminder whenever a published file is edited.
+- **Bulk operations.** Multi-select for the predictable batch fixes — a whole
+  mislabelled genre family, or a run of tracks from one bad playlist.
+
+### non-requirements
+
+Not a player, not a library browser, not a Rekordbox replacement. It is a
+correction surface. Anything the pipeline can decide, it decides.
+
+## 16. milestones
 
 1. **M0** — format probe. ✅ **Done.** AIFF selected; frame map confirmed.
 2. **M1** — schema (§11) + resumable stage runner.
@@ -447,7 +525,9 @@ Genre-first foldering also makes USB subsetting a folder copy, which matters at
 4. **M3** — normalisation (§6.5) + resolution + confidence (§12).
    *Normalisation lands first; it is worth more than any source.*
 5. **M4** — Essentia classification + arbitration.
-6. **M5** — elicitation UI → `precedence` table.
-7. **M6** — transcode + tag + publish (§14).
-8. **M7** — full run over the playlists; review queue with URL override.
-9. **M8** — `music add` for the 7 Beatport WAVs and the SoundCloud track.
+6. **M5** — web ui (§15): review queue, metadata editor, url override, audio
+   preview, provenance.
+7. **M6** — elicitation mode → `precedence` table.
+8. **M7** — transcode + tag + publish (§14).
+9. **M8** — full run over the playlists.
+10. **M9** — `music add` for the 7 Beatport WAVs and the SoundCloud track.
