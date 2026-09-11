@@ -622,6 +622,46 @@ def test_the_loose_pass_only_runs_when_nothing_agrees_exactly():
 # --- artwork belongs to the release we tagged ------------------------------
 
 
+def test_the_highest_quality_cover_wins_among_correct_releases():
+  """Release-accuracy first, then quality — not the other way round.
+
+  iTunes serves 1200x1200 where Spotify serves 640x640 and the Cover Art
+  Archive varies, so when several sources name the album we tagged, the best
+  picture of it wins.
+  """
+  got = resolved(
+    arbitrate(
+      [
+        cand("album", "Planet Pit", "musicbrainz"),
+        cand("artwork_url", "https://caa/planetpit.jpg", "musicbrainz"),
+        cand("album", "Planet Pit", "itunes"),
+        cand("artwork_url", "https://itunes/planetpit.jpg", "itunes"),
+        cand("album", "Planet Pit", "spotify"),
+        cand("artwork_url", "https://spotify/planetpit.jpg", "spotify"),
+      ],
+      family="pop",
+    )
+  )
+  assert got["artwork_url"][0] == "https://itunes/planetpit.jpg"
+
+
+def test_a_correct_smaller_cover_beats_a_larger_wrong_one():
+  """When only the album source has the release, its cover wins on accuracy."""
+  got = resolved(
+    arbitrate(
+      [
+        cand("album", "Icarus II", "musicbrainz"),
+        cand("artwork_url", "https://caa/icarus2.jpg", "musicbrainz"),
+        cand("album", "June - Single", "itunes"),
+        cand("artwork_url", "https://itunes/june-single.jpg", "itunes"),
+      ],
+      family="hip-hop",
+    )
+  )
+  assert got["album"][0] == "Icarus II"
+  assert got["artwork_url"][0] == "https://caa/icarus2.jpg"
+
+
 def test_artwork_comes_from_the_source_that_supplied_the_album():
   """The bug behind almost every wrong cover in the first real library.
 

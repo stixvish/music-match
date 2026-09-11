@@ -15,6 +15,7 @@ from collections.abc import Sequence
 from pydantic import ValidationError
 
 from music.identify import Evidence, Match, distinct_rival_gap, variant_mismatch
+from music.publish.naming import format_artists
 from music.sources import cache
 from music.sources.base import FieldCandidate, Identity, ReleaseInfo
 from music.sources.ratelimit import RateLimiter, with_backoff
@@ -354,10 +355,17 @@ class MusicBrainz:
     releases: list[ReleaseInfo],
     identity: Identity,  # noqa: ARG002 - kept for symmetry with the callers
   ) -> Sequence[FieldCandidate]:
+    act, featured = split_credit(top.get("artist-credit"))
+    title = str(top.get("title", ""))
+    # the guest belongs in the title, in house style (SPEC.md §14). MusicBrainz
+    # puts it in the credit instead, so `Neverender` came through with no sign
+    # of Tame Impala anywhere on the tag.
+    if featured and "feat" not in title.casefold() and "ft." not in title.casefold():
+      title = f"{title} (feat. {format_artists(featured)})"
     candidates = [
-      FieldCandidate(field="title", value=str(top.get("title", "")), source=NAME),
+      FieldCandidate(field="title", value=title, source=NAME),
       FieldCandidate(
-        field="artist", value=_credit_name(top.get("artist-credit")), source=NAME
+        field="artist", value=act or _credit_name(top.get("artist-credit")), source=NAME
       ),
     ]
     if top.get("id"):
@@ -465,6 +473,45 @@ def recording_artist(recording: dict) -> str:
     The primary credited artist, or an empty string.
   """
   return _credit_name(recording.get("artist-credit"))
+
+
+def split_credit(credit: object) -> tuple[str, tuple[str, ...]]:
+  """Split a MusicBrainz artist-credit into the act and its featured guests.
+
+  MusicBrainz is the only source that distinguishes these, which is why §7
+  ranks it first for credits: it records the join phrase between each name.
+  `Justice feat. Tame Impala` arrives as two entries joined by " feat. ",
+  where iTunes flattens the same thing to `Justice & Tame Impala` and Spotify
+  drops the guest entirely.
+
+  A `feat.`/`featuring` join phrase marks everyone after it as featured; any
+  other phrase (`&`, `,`, `and`) marks a collaboration, and those names stay
+  with the artist.
+
+  Args:
+    credit: A raw `artist-credit` array.
+
+  Returns:
+    The credited act, and the featured artists in order.
+  """
+  if not isinstance(credit, list):
+    return "", ()
+  names: list[str] = []
+  featured: list[str] = []
+  seen_feat = False
+  for entry in credit:
+    if not isinstance(entry, dict):
+      continue
+    artist = entry.get("artist") or {}
+    name = entry.get("name") or (artist.get("name") if isinstance(artist, dict) else "")
+    if name:
+      (featured if seen_feat else names).append(str(name))
+    join = str(entry.get("joinphrase") or "").casefold()
+    if "feat" in join or "with" in join:
+      seen_feat = True
+  # collaborators stay with the act in house style ("A & B"); only names
+  # after a feat. join phrase move into the title
+  return (format_artists(names), tuple(featured))
 
 
 def _credit_name(credit: object) -> str:

@@ -853,13 +853,43 @@ cases where MusicBrainz correctly chose the *album* while iTunes and Spotify
 offered the *single* — `Icarus II` against `June - Single` — so no source held
 the right cover at all.
 
-**MusicBrainz therefore supplies its own artwork now**, from the Cover Art
-Archive, for the exact release the album fields came from. Availability is
+**Release-accuracy is enforced first, then quality.** Every source that named
+the album we tagged is equally correct, so among *those* the ranking is free to
+be about image quality. Measured 2026-09-11: iTunes serves 1200x1200 at
+294-546 KB, Spotify 640x640 at 126-180 KB — about four times the pixel area —
+so the artwork table reads `itunes, spotify, musicbrainz`. That order is only
+ever consulted among sources that agree on the release; a correct smaller cover
+still beats a larger wrong one, which is the entire point.
+
+**MusicBrainz supplies its own artwork now**, from the Cover Art
+Archive, for the exact release the album fields came from. It ranks last on
+quality — the scans are user-contributed and vary — and exists for the case
+where nothing else has the release at all. Availability is
 checked and cached rather than assumed, so a missing cover leaves the field to
 iTunes instead of emitting a URL that 404s at publish time. Measured over 14
 real releases: 13 had art on the release itself, and the one that did not
 (`channel ORANGE`) had it on the release group, so release-then-group gave
 complete coverage.
+
+### features come from the join phrase, not from the album artist
+
+`_credit_name` read only the first entry of a MusicBrainz artist-credit, so
+everything after it was discarded: `Neverender` was tagged `Justice` with no
+sign of Tame Impala anywhere. MusicBrainz records the join phrase between each
+name, which is exactly why §7 ranks it first for credits — iTunes flattens the
+same credit to `Justice & Tame Impala` and Spotify drops the guest entirely.
+
+`split_credit` now reads the whole credit: names joined by `feat.` become
+featured artists and move into the title in house style; names joined by `&`
+or `,` are collaborators and stay on the artist line.
+
+An earlier version inferred feature-ness instead, treating any artist beyond
+the *album artist* as a guest. **That was wrong, and the user caught it: a
+collaboration can appear on an album by one person.** `Neverender` is on
+*Hyperdrama*, a Justice album, and is still a Justice/Tame Impala
+collaboration — MusicBrainz joins the two with `&`, not `feat.`, and it is
+right. The catalogue's own distinction is the authority; inferring one from
+adjacent fields is not.
 
 ### a pasted link is fetched, not filed
 

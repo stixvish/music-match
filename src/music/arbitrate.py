@@ -120,10 +120,9 @@ _BASE: dict[str, tuple[str, ...]] = {
   "remixer": ("derived", "musicbrainz", "discogs"),
   "mix_name": ("derived", "musicbrainz"),
   "original_artist": ("musicbrainz",),
-  # musicbrainz first because its cover comes from the Cover Art Archive for
-  # the exact release the album fields came from; the others are the cover of
-  # whichever release they happened to match.
-  "artwork_url": ("musicbrainz", "itunes", "spotify"),
+  # quality order, consulted only among sources that named the same release;
+  # release-accuracy is enforced first, in `_artwork_for`.
+  "artwork_url": ("itunes", "spotify", "musicbrainz"),
   "bpm": ("local", "beatport"),
   "key": ("local", "beatport"),
 }
@@ -547,27 +546,35 @@ def _artwork_for(
   usable = [c for c in options if c.value]
   if not usable:
     return None
+  order = list(ranked)
 
-  if album_source:
-    owned = next((c for c in usable if c.source == album_source), None)
-    if owned is not None:
-      return owned
+  def by_precedence(pool: Sequence[FieldCandidate]) -> FieldCandidate:
+    return min(
+      pool, key=lambda c: order.index(c.source) if c.source in order else len(order)
+    )
 
+  # Every source that named the same release is equally correct, so among those
+  # the ranking is free to be about quality. Measured 2026-09-11: iTunes serves
+  # 1200x1200 at 294-546 KB and Spotify 640x640 at 126-180 KB — roughly four
+  # times the pixel area — so iTunes leads, and the Cover Art Archive sits last
+  # despite being the most release-accurate, because its scans are
+  # user-contributed and vary.
   if album:
     wanted = _album_key(album)
     albums = {c.source: c.value for c in candidates if c.field == "album" and c.value}
     same_release = [c for c in usable if _album_key(albums.get(c.source, "")) == wanted]
     if same_release:
-      order = list(ranked)
-      return min(
-        same_release,
-        key=lambda c: order.index(c.source) if c.source in order else len(order),
-      )
+      return by_precedence(same_release)
 
-  order = list(ranked)
-  return min(
-    usable, key=lambda c: order.index(c.source) if c.source in order else len(order)
-  )
+  # Nobody else has the release we tagged. The album source's own cover is then
+  # the only one certainly of the right record, and correct-but-smaller beats
+  # larger-and-wrong — which is the whole reason this function exists.
+  if album_source:
+    owned = next((c for c in usable if c.source == album_source), None)
+    if owned is not None:
+      return owned
+
+  return by_precedence(usable)
 
 
 def _is_non_label(value: str) -> bool:
