@@ -289,7 +289,7 @@ Each field was written with exactly one frame, so display confirms the mapping.
   until **Reload Tag** — confirming that Rekordbox caches tags per path and
   will not re-read on reimport. Operational rule: **tag before import.**
 
-### fLAC key map (recorded for a possible space-constrained USB build)
+### flac key map (recorded for a possible space-constrained USB build)
 
 `REMIXER` (not MIXARTIST) · `LABEL` · `INITIALKEY` (not KEY) · `BPM` (not
 TEMPO) · `DATE` · `GROUPING` · comment: Rekordbox reads `COMMENT`, Serato reads
