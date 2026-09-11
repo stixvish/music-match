@@ -101,11 +101,15 @@ at track 1,800 of 2,329 resumes at 1,800.
    stage in the pipeline.**
 6. **Classify** — Essentia `genre_discogs400`. **Only the top-level genre is
    used** (the part before `---`), to route precedence. The `Style` half is
-   unreliable and is never written as a tag (§7).
+   unreliable and is never written as a tag (§7). This produces a
+   **provisional** family.
 7. **Resolve identity** — AcoustID fingerprint → normalised text search →
    manual URL override. Emits a confidence score (§12). Penalise version
    variants (`(instrumental)`, `(sped up)`) the query did not ask for.
-8. **Arbitrate** — per-(genre-family → field) precedence (§12).
+8. **Arbitrate** — per-(genre-family → field) precedence (§12). The family is
+   **finalised here, not at step 6**: the ISRC country override (§7) needs an
+   ISRC, which only exists once identity is resolved. A fresh download carries
+   none.
 9. **Transcode** — ffmpeg → **AIFF** (`-c:a pcm_s16be`), native sample rate
    (no resampling). 16-bit is correct: the source is lossy AAC.
 10. **Tag** — ID3v2.4 frames (§10).
@@ -172,15 +176,25 @@ tracks to a Spotify-first table instead.
 The fix is an **ISRC registrant-country override**: an `IN`/`LK`/`PK`/`BD`
 prefix routes to `world` regardless of what the classifier said. This does not
 reintroduce the circular dependency the classifier exists to break — ISRC comes
-from identity resolution, not from a contested metadata field.
+from identity resolution, not from a contested metadata field. It does mean the
+family is **finalised during arbitration, not during classification** (§6).
 
 ```
-cp5 before override:  world 37%   (scattered)
+cp5 before override:  world 37%   scattered, FAIL
 cp5 after override:   world 87%   PASS
 ```
 
-The remaining 13% are tracks with no ISRC, which correctly fall back to the
-classifier.
+ISRC must come from **resolution**, never from the file. A fresh yt-dlp
+download carries no ISRC (§4), and the existing tags are being discarded, so a
+gate that reads the file measures a condition that will never occur. Measured
+on a fresh-download simulation, resolution recovers ISRC for **19 of 20**
+Bollywood tracks — AcoustID carries it where text search is weak — and **17 of
+20** carry an `IN` prefix.
+
+> **Limitation:** ISRC registrant country is not music origin. `Saree Ke Fall
+> Sa` resolves to `GBSGZ1300125` — a UK-registered release of Indian music — so
+> the override does not fire. Those tracks fall back to the classifier, which is
+> the correct failure mode but not a correct answer.
 
 | Field | Leading sources (to be calibrated, §9) |
 |---|---|

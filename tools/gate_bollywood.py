@@ -3,6 +3,12 @@
 SPEC.md §7 flags the ~105 Bollywood tracks as both the least reliable routing
 and the thinnest source coverage. If families are wrong there, arbitration
 silently applies the wrong precedence table to them.
+
+**ISRC is obtained by resolving each track, never read from the existing file
+tags.** Those tags are being discarded (Option C) and a fresh yt-dlp download
+carries no ISRC at all, so reading them would measure a condition that will
+never occur in production. An earlier version of this gate did exactly that and
+reported a number that meant nothing.
 """
 
 import argparse
@@ -15,6 +21,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from music.classify import Classifier, family_for_identity  # noqa: E402
+from music.normalise import normalise  # noqa: E402
+from music.resolve import Resolver  # noqa: E402
+from music.sources import build_enrichment_sources  # noqa: E402
+from music.sources.acoustid import AcoustId  # noqa: E402
+from music.sources.base import Identity  # noqa: E402
+from music.sources.musicbrainz import MusicBrainz  # noqa: E402
+from music import config, db  # noqa: E402
 
 BOLLYWOOD_TAGS = ("bollywood", "indian pop", "indian", "desi")
 
@@ -37,6 +50,15 @@ def main() -> int:
 
   audio_dir = Path.home() / "Music" / "yt-dlp"
   classifier = Classifier()
+  cfg = config.load()
+  conn = db.connect(cfg.paths.database)
+  db.migrate(conn)
+  resolver = Resolver(
+    conn,
+    MusicBrainz(conn),
+    AcoustId(conn, cfg.credentials["ACOUSTID_API_KEY"]),
+    build_enrichment_sources(conn, cfg),
+  )
   families: collections.Counter = collections.Counter()
   genres: collections.Counter = collections.Counter()
   shown = []
@@ -51,8 +73,19 @@ def main() -> int:
       families["error"] += 1
       print(f"  error on {row['file'][:40]}: {exc}", file=sys.stderr)
       continue
-    # the isrc override applies once identity is known (SPEC.md §7)
-    isrc = row["tags"].get("isrc")
+    # the isrc override applies once identity is known (SPEC.md §7). it is
+    # resolved here, never read from the file: production has no file isrc.
+    cleaned = normalise(row["tags"].get("artist", ""), row["tags"].get("title", ""))
+    resolution = resolver.resolve(
+      Identity(
+        artist=cleaned.artist,
+        title=cleaned.title,
+        artist_full=cleaned.artist_full,
+        duration_s=float(row["dur"]) if row.get("dur") else None,
+      ),
+      path,
+    )
+    isrc = next((c.value for c in resolution.candidates if c.field == "isrc"), "")
     family = family_for_identity(top.genre, isrc)
     families[family] += 1
     genres[top.genre] += 1
