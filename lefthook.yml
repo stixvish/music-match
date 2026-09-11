@@ -1,0 +1,25 @@
+pre-commit:
+  parallel: true
+  commands:
+    format:
+      glob: "*.py"
+      run: uv run ruff format --check {staged_files}
+    lint:
+      glob: "*.py"
+      run: uv run ruff check {staged_files}
+    types:
+      glob: "*.py"
+      run: uv run mypy src
+    secrets:
+      run: gitleaks protect --staged --no-banner
+    spec:
+      glob: "spec.md"
+      run: uv run python tools/check_spec.py
+
+commit-msg:
+  commands:
+    conventional:
+      # spec.md rule: conventional, lowercase, under 70 chars, no body
+      run: |
+        head -1 {1} | grep -qE '^(feat|fix|docs|refactor|test|chore)(\([a-z-]+\))?: .{1,60}$' \
+          || { echo "bad subject: conventional, lowercase, <70 chars"; exit 1; }
