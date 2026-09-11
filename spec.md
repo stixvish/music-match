@@ -26,6 +26,7 @@ correct tag set.
 - Cue points, beatgrids, crates — owned by the DJ apps, not this tool.
 - **Playlist provenance** — playlists will be rebuilt by hand in Rekordbox.
 - **`tutorial-tracks/`** — excluded from the pipeline entirely.
+- **Hosting / multi-tenancy** — local-first by decision, not by omission (§13).
 - **Migrating the existing 2,329 M4A files** — they are being re-downloaded.
   Their tags are deliberately discarded (§4, Option C).
 - 100% composer/lyricist coverage — best-effort, never blocking.
@@ -433,6 +434,24 @@ collection without a Reload Tag.
 **Originals.** Staging files are retained until a track reaches `published` and
 is verified, then eligible for cleanup. The 16 GB of existing M4A files stay
 untouched until the new library is verified end to end.
+
+### distribution
+
+**Local-first. Packaged so others can run it on their own machine** (Docker
+image or `pipx`). **No cookies ever leave a user's machine, and no audio is
+hosted.**
+
+A hosted version would have to hold users' Google session tokens. Those are
+*account*-scoped, not YouTube-scoped — a breach would leak someone else's Gmail
+and Drive, not just their music. It would also turn a personal tool into a
+service that downloads YouTube audio on other people's behalf, which carries
+materially different legal exposure. Neither is worth the convenience.
+
+§15's web ui is already a localhost app, so distribution is a packaging problem,
+not a rearchitecture.
+
+**Keep all database access behind a single module** so that adding a `user_id`
+later is a mechanical migration. Do not build multi-tenancy now.
 
 **Dependencies.** `yt-dlp` (needs a JS runtime — Deno — for some formats),
 `ffmpeg`, `essentia-tensorflow` (cp314 wheels), `mutagen`, `chromaprint/fpcalc`.
