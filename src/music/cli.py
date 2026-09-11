@@ -11,8 +11,10 @@ from music import config, db
 from music.acquire import (
   Download,
   already_have,
+  classify_download,
   download,
   enumerate_playlist,
+  flag_video_rip,
   register,
 )
 from music.publish import publish_track
@@ -81,6 +83,10 @@ def cmd_ingest(args: argparse.Namespace) -> int:
     try:
       item = download(ref.video_id, cfg.paths.staging, cfg.youtube)
       track_id = register(conn, item)
+      verdict = classify_download(item)
+      flag_video_rip(conn, track_id, verdict)
+      if verdict.is_video_rip:
+        log.warning("  video rip (%s): %s", ",".join(verdict.reasons), item.title[:44])
       _stub_resolve(conn, track_id, item)
       dest = publish_track(conn, track_id, cfg.paths.library, cfg.paths.staging)
       log.info("published: %s", dest.name)
