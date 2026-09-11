@@ -1,0 +1,66 @@
+[project]
+name = "music"
+version = "0.1.0"
+requires-python = ">=3.14"
+dependencies = [
+  "yt-dlp",
+  "mutagen",
+  "pydantic>=2",
+  "httpx",
+]
+
+[project.scripts]
+music = "music.cli:main"
+
+[dependency-groups]
+dev = ["ruff", "mypy", "pytest", "pytest-cov"]
+# essentia-tensorflow is heavy (~120 MB) and only needed for classify.
+classify = ["essentia-tensorflow"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+# --- style: google python style guide, 2-space indent (deliberate deviation) ---
+[tool.ruff]
+indent-width = 2
+line-length = 88
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "N", "D", "UP", "B", "A", "C4", "RET", "SIM", "ARG", "PTH"]
+ignore = ["D203", "D213"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["D100", "D103", "ARG"]
+
+[tool.ruff.format]
+indent-style = "space"
+
+[tool.mypy]
+python_version = "3.14"
+warn_unused_ignores = true
+warn_redundant_casts = true
+warn_return_any = true
+
+# pure modules are held to a stricter bar; see spec.md §19
+[[tool.mypy.overrides]]
+module = ["music.normalise", "music.arbitrate", "music.identify", "music.publish.naming"]
+disallow_untyped_defs = true
+strict_equality = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+  "live: hits real networks/models. excluded from ci (spec.md §19)",
+  "slow: seconds, not milliseconds",
+]
+
+[tool.coverage.report]
+# hard gate applies to pure modules only; see spec.md §19
+include = ["src/music/normalise.py", "src/music/arbitrate.py",
+           "src/music/identify.py", "src/music/publish/naming.py"]
+fail_under = 90
