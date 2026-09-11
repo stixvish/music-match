@@ -75,6 +75,7 @@ markers = [
 # each is added here as it is built (tasks/todo.md t8, t11, t24, t26).
 include = [
   "src/music/normalise.py",
+  "src/music/identify.py",
   "src/music/publish/naming.py",
 ]
 fail_under = 90
