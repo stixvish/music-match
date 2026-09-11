@@ -181,13 +181,42 @@ def arbitrate(
   for field, options in sorted(by_field.items()):
     if field in ALBUM_GROUP:
       continue
+    if field in DATE_FIELDS:
+      chosen = _earliest(options)
+      decisions.append(Decision(field, chosen.value, chosen.source))
+      continue
     ranked = ranking(family, field)
     winner = next((c for source in ranked for c in options if c.source == source), None)
-    # a field nobody ranks still gets a value rather than being dropped
-    winner = winner or options[0]
-    decisions.append(Decision(field, winner.value, winner.source))
+    if winner is not None:
+      decisions.append(Decision(field, winner.value, winner.source))
+      continue
+    # no ranked source had a value. take an unranked one rather than lose the
+    # field, but mark it so it can be audited — this is how itunes' coarse
+    # "Dance" won genre on an electronic track.
+    spare = options[0]
+    decisions.append(Decision(field, spare.value, spare.source, decided_by="fallback"))
 
   return sorted(decisions, key=lambda d: d.field)
+
+
+def _earliest(options: Sequence[FieldCandidate]) -> FieldCandidate:
+  """Pick the earliest date, preferring precision when the year is the same.
+
+  Args:
+    options: Date candidates from different sources.
+
+  Returns:
+    The winning candidate.
+  """
+
+  def key(candidate: FieldCandidate) -> tuple[str, int, str]:
+    value = candidate.value.strip()
+    # earlier year first; within a year, more precision wins; between two
+    # equally precise dates, the earlier one wins. comparing the full string
+    # first would make a bare "2013" beat "2013-03-16", losing precision.
+    return (value[:4], -len(value), value)
+
+  return min(options, key=key)
 
 
 def persist(
