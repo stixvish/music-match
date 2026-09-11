@@ -1,3 +1,6 @@
+# action versions: checkout v5+ and gitleaks v3 run on node24; node20 is
+# deprecated. setup-uv publishes no bare major tag, so it is pinned to an exact
+# version and must be bumped deliberately.
 name: checks
 
 on:
@@ -8,8 +11,8 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.1.0
       - run: uv sync
       - run: uv run ruff format --check .
       - run: uv run ruff check .
@@ -17,16 +20,16 @@ jobs:
   types:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.1.0
       - run: uv sync
       - run: uv run mypy src
 
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.1.0
       # ffmpeg synthesizes test audio; no binaries are committed (SPEC.md §19)
       - run: sudo apt-get update && sudo apt-get install -y ffmpeg
       - run: uv sync
@@ -35,18 +38,18 @@ jobs:
   secrets:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v2
+      - uses: gitleaks/gitleaks-action@v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   spec:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.1.0
       # must be the project's python: check_spec.py uses 3.14 syntax (PEP 758)
       - run: uv sync
       - run: uv run python tools/check_spec.py
