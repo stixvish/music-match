@@ -51,6 +51,11 @@ warn_unused_ignores = true
 warn_redundant_casts = true
 warn_return_any = true
 
+# third-party packages without type stubs
+[[tool.mypy.overrides]]
+module = ["yt_dlp.*", "mutagen.*", "essentia.*"]
+ignore_missing_imports = true
+
 # pure modules are held to a stricter bar; see SPEC.md §19
 [[tool.mypy.overrides]]
 module = ["music.normalise", "music.arbitrate", "music.identify", "music.publish.naming"]
