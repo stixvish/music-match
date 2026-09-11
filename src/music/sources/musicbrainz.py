@@ -98,7 +98,19 @@ class MusicBrainz:
     if identity.isrc:
       data = self._get(f"isrc/{identity.isrc}", {"inc": "releases+artist-credits"})
       return list(data.get("recordings", []))
-    query = f'recording:"{identity.title}" AND artist:"{identity.artist}"'
+    recordings = self._search_text(identity.artist, identity.title, limit)
+    # searching the primary artist alone misses releases credited to the pair
+    # ("Jake Fine & STRAIGHTUPJE"), so retry with the full credit.
+    if (
+      not recordings
+      and identity.artist_full
+      and (identity.artist_full != identity.artist)
+    ):
+      recordings = self._search_text(identity.artist_full, identity.title, limit)
+    return recordings
+
+  def _search_text(self, artist: str, title: str, limit: int) -> list[dict]:
+    query = f'recording:"{title}" AND artist:"{artist}"'
     data = self._get("recording", {"query": query, "limit": str(limit)})
     return list(data.get("recordings", []))
 

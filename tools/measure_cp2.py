@@ -92,6 +92,7 @@ def main() -> int:
       artist=cleaned.artist,
       title=cleaned.title,
       duration_s=float(row["dur"]) if row.get("dur") else None,
+      artist_full=cleaned.artist_full,
     )
     match, _ = source.evaluate(identity)
     bucket = (

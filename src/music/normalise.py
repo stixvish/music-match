@@ -26,7 +26,7 @@ _NOISE = re.compile(
   r"official\s*(?:music\s*)?(?:video|audio|visuali[sz]er)?|"
   r"music\s*video|lyrics?(?:\s*video)?|visuali[sz]er|m/?v|"
   r"audio|hd|hq|4k|full\s*(?:album|song)|out\s*now|free\s*(?:dl|download)|"
-  r"premiere|explicit|clean|remaster(?:ed)?(?:\s*\d{4})?"
+  r"premiere|explicit|clean|remaster(?:ed)?(?:\s*\d{4})?|bonus\s*track?"
   r")\s*[\)\]]",
   re.IGNORECASE,
 )
@@ -35,7 +35,7 @@ _NOISE = re.compile(
 # becomes "Maroon 5 - Sugar Official Music Video" with nothing to split on.
 _NOISE_BARE = re.compile(
   r"\s*[-|]?\s*(?:official\s*(?:music\s*)?video|official\s*audio"
-  r"|lyrics?\s*video|visuali[sz]er|out\s*now)\s*$",
+  r"|lyrics?\s*video|visuali[sz]er|out\s*now|bonus\s*track)\s*$",
   re.IGNORECASE,
 )
 _FEAT = re.compile(
@@ -54,6 +54,10 @@ class Normalised:
   artist: str
   title: str
   featured: tuple[str, ...] = ()
+  # the full credit, collaborators intact. searching the primary artist alone
+  # misses releases credited to the pair ("Jake Fine & STRAIGHTUPJE"), so the
+  # resolver retries with this when the primary-artist query finds nothing.
+  artist_full: str = ""
 
   @property
   def is_empty(self) -> bool:
@@ -83,6 +87,21 @@ def clean_artist(raw: str) -> str:
   # search works better with one artist; collaborators come from the catalogue
   parts = _MULTI_ARTIST.split(text, maxsplit=1)
   return _tidy(parts[0]) if parts else text
+
+
+def clean_artist_full(raw: str) -> str:
+  """Clean an artist string without dropping collaborators.
+
+  Args:
+    raw: Artist tag or channel name.
+
+  Returns:
+    The full credit with channel noise removed.
+  """
+  text = _tidy(raw)
+  text = _TOPIC.sub("", text)
+  text = _VEVO.sub("", text)
+  return _tidy(_OFFICIAL_SUFFIX.sub("", text))
 
 
 def extract_featured(raw: str) -> tuple[str, ...]:
@@ -125,10 +144,35 @@ def clean_title(raw: str, artist: str = "") -> str:
   text = _NOISE.sub(" ", text)
   text = _NOISE_BARE.sub("", text)
 
-  if artist:
-    text = re.sub(rf"^\s*{re.escape(artist)}\s*[-–:]\s*", "", text, flags=re.IGNORECASE)
+  text = _strip_artist_prefix(text, artist)
   text = _FEAT.sub(" ", text)
   return _tidy(text).strip(" -–:|")
+
+
+def _strip_artist_prefix(text: str, artist: str) -> str:
+  """Remove a redundant "Artist - " prefix, collaborators included.
+
+  A plain exact-match strip fails on the common collaborator form: the title
+  "Selena Gomez, Marshmello - Wolves" keeps its prefix because the cleaned
+  artist is only "Selena Gomez". So the whole segment before the dash is
+  removed when it *contains* the artist.
+
+  Args:
+    text: Title text.
+    artist: Already-cleaned primary artist.
+
+  Returns:
+    The title without the redundant prefix.
+  """
+  if not artist or " - " not in text:
+    return text
+  head, _, tail = text.partition(" - ")
+  if not tail.strip():
+    return text
+  # only strip when the head is a credit line, not part of the song's name
+  if artist.casefold() in head.casefold() and len(head) < 60:
+    return tail
+  return text
 
 
 def normalise(artist: str, title: str) -> Normalised:
@@ -142,6 +186,7 @@ def normalise(artist: str, title: str) -> Normalised:
     A Normalised pair.
   """
   cleaned_artist = clean_artist(artist)
+  full_artist = clean_artist_full(artist)
   featured = extract_featured(title)
   cleaned_title = clean_title(title, cleaned_artist)
 
@@ -152,4 +197,4 @@ def normalise(artist: str, title: str) -> Normalised:
     if head.strip() and tail.strip():
       cleaned_artist, cleaned_title = _tidy(head), _tidy(tail)
 
-  return Normalised(cleaned_artist, cleaned_title, featured)
+  return Normalised(cleaned_artist, cleaned_title, featured, full_artist)

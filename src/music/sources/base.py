@@ -55,6 +55,8 @@ class Identity:
   duration_s: float | None = None
   isrc: str | None = None
   mb_recording_id: str | None = None
+  # full credit with collaborators, for a retry when the primary artist misses
+  artist_full: str = ""
 
 
 class Source(Protocol):
