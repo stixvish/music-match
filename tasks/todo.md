@@ -25,7 +25,7 @@
 
 ## phase 1 — normalise + accuracy spike
 
-- [ ] **t8** `normalise.py` + golden-file tests
+- [x] **t8** `normalise.py` + golden-file tests
   - accept: seeded with real failures — `LMFAOVEVO`,
     `Calvin Harris - I Need Your Love (Official Video)`, `Burnie, Phoenix Ho`
   - verify: golden table passes; 90% coverage (§19); pure, no i/o
