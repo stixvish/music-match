@@ -36,7 +36,9 @@ def main() -> int:
       errors.append(f"stale claim present: {phrase!r}")
 
   for line in text.splitlines():
-    if re.match(r"^#{1,3} [a-z]*[A-Z]", line) and not re.search(r"§|ID3|FLAC|AIFF|BPM", line):
+    if re.match(r"^#{1,3} [a-z]*[A-Z]", line) and not re.search(
+      r"§|ID3|FLAC|AIFF|BPM", line
+    ):
       errors.append(f"heading may be mangled: {line!r}")
 
   for e in errors:
