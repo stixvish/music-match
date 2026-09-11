@@ -224,15 +224,16 @@ prefer a date with full day precision over a bare year when both exist.
 
 ### why beatport matters, measured
 
-Not for taxonomy granularity — the opposite, in fact. Genre labels embedded in
-purchased Beatport files are **coarser** than Discogs Style:
+Two reasons, and the first was initially misread.
 
-```
-Tiesto - All Nighter    beatport: "Dance / Electro Pop"    discogs: "Progressive House"
-```
+**Sub-genre taxonomy.** Genre labels embedded in *purchased files* are coarse —
+`Dance / Pop`, `Dance / Electro Pop` — which suggested Beatport was blunter than
+Discogs Style. That is only true of the file tags. The v4 API exposes a
+**separate sub-genre resource** (`/v4/catalog/genres/{id}/sub-genres`), so the
+fine taxonomy exists; purchased-file tags simply carry the top-level genre.
 
-It matters for **coverage of recent digital-only electronic releases**, where
-Discogs is a physical-media-first database and simply has nothing:
+**Coverage of recent digital-only electronic releases**, where Discogs is a
+physical-media-first database and has nothing:
 
 ```
 7 purchased beatport tracks (2023-2026):   discogs found style for 1  (14%)
@@ -243,12 +244,40 @@ Future downloads are mostly electronic, so this gap widens over time rather
 than closing. Beatport therefore ranks **first for genre on electronic**, and
 Discogs remains first elsewhere.
 
-**Access is unresolved.** The v4 API is OAuth-gated to approved partners and
-the public site is behind a bot challenge, so there is no implementable
-transport yet. The adapter is built against the `Source` interface with the
-transport left unimplemented; if partner access is granted it is one function
-and nothing else changes. This is the reason §7 isolated Beatport behind an
-adapter in the first place.
+### beatport access and adapter shape
+
+The developer portal at `api.beatport.com/v4/docs/` is **readable with an
+ordinary Beatport account** — no partner status needed to see the reference. A
+full v4 REST API is documented, with three OAuth2 grant flows: authorization
+code, user password, and client credentials.
+
+What is *not* self-serve is an OAuth application. `/v4/auth/o/applications/`
+returns `404`, and an unauthenticated catalog call returns
+`{"detail":"Authentication credentials were not provided."}`. So a
+`client_id`/`client_secret` still comes from the partner application.
+
+The public store site is separately behind a bot challenge, so scraping it is
+not an alternative route.
+
+**The adapter keys on ISRC, not text search.** `/v4/catalog/tracks/store/{isrc}`
+resolves a track by ISRC directly — an exact join, not a fuzzy match. Resolution
+already recovers ISRC for ~97% of tracks (§4), which makes this the single
+highest-precision lookup available from any source. Text search
+(`/v4/catalog/search`) is the fallback for the rest.
+
+Endpoints the adapter needs:
+
+| Purpose | Endpoint |
+|---|---|
+| Primary lookup | `/v4/catalog/tracks/store/{isrc}` |
+| Fallback lookup | `/v4/catalog/search` |
+| Track detail | `/v4/catalog/tracks/{id}` |
+| Sub-genre taxonomy | `/v4/catalog/genres/{id}/sub-genres` |
+| Token | `/v4/auth/o/token/` (client credentials) |
+
+The transport is the only unimplemented piece; everything above is designed
+against the documented contract. This is the reason §7 isolated Beatport behind
+an adapter in the first place.
 
 ### artist query strategy
 
