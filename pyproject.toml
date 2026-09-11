@@ -7,6 +7,7 @@ dependencies = [
   "mutagen",
   "pydantic>=2",
   "httpx",
+  "yt-dlp-ejs>=0.8.0",
 ]
 
 [project.scripts]

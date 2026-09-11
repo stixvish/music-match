@@ -8,7 +8,13 @@ import sys
 from pathlib import Path
 
 from music import config, db
-from music.acquire import already_have, download, enumerate_playlist, register
+from music.acquire import (
+  Download,
+  already_have,
+  download,
+  enumerate_playlist,
+  register,
+)
 from music.publish import publish_track
 
 log = logging.getLogger("music")
@@ -20,28 +26,35 @@ def _open(cfg: config.Config) -> sqlite3.Connection:
   return conn
 
 
-def _stub_resolve(conn: sqlite3.Connection, track_id: int) -> None:
-  """Phase-0 placeholder: seed tags from whatever the container carried.
+def _stub_resolve(conn: sqlite3.Connection, track_id: int, item: Download) -> None:
+  """Phase-0 placeholder for real resolution.
 
-  Replaced by real resolution in phase 1 (tasks/todo.md t8-t11). Values are
-  marked `precedence` so a later run can overwrite them; manual edits never are.
+  Seeds artist and title from what yt-dlp reports, splitting an "Artist -
+  Title" video title when present. This is deliberately naive: it is replaced
+  wholesale in phase 1 by normalisation plus source lookup (tasks/todo.md
+  t8-t11), which is where the accuracy actually comes from.
+
+  Values are written as `precedence` so a later resolution run may overwrite
+  them. Manual edits never are (SPEC.md §15).
+
+  Args:
+    conn: Open connection.
+    track_id: Track to seed.
+    item: The download yt-dlp produced.
   """
-  row = conn.execute(
-    "SELECT s.raw_tags FROM track t JOIN source_file s ON s.id = t.source_file_id"
-    " WHERE t.id = ?",
-    (track_id,),
-  ).fetchone()
-  import json
+  title = item.title.strip()
+  artist = item.channel.removesuffix(" - Topic").strip()
+  if " - " in title:
+    head, _, tail = title.partition(" - ")
+    if head.strip() and tail.strip():
+      artist, title = head.strip(), tail.strip()
 
-  raw = json.loads(row["raw_tags"] or "{}") if row else {}
-  mapping = {"title": "title", "artist": "artist", "album": "album"}
-  for field, source_key in mapping.items():
-    value = raw.get(source_key)
+  for field, value in (("artist", artist), ("title", title)):
     if value:
       conn.execute(
         "INSERT OR REPLACE INTO resolved_field"
         " (track_id, field, value, source, decided_by)"
-        " VALUES (?,?,?,'container','precedence')",
+        " VALUES (?,?,?,'yt-dlp','precedence')",
         (track_id, field, value),
       )
 
@@ -68,7 +81,7 @@ def cmd_ingest(args: argparse.Namespace) -> int:
     try:
       item = download(ref.video_id, cfg.paths.staging, cfg.youtube)
       track_id = register(conn, item)
-      _stub_resolve(conn, track_id)
+      _stub_resolve(conn, track_id, item)
       dest = publish_track(conn, track_id, cfg.paths.library, cfg.paths.staging)
       log.info("published: %s", dest.name)
       published += 1
