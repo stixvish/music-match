@@ -126,11 +126,33 @@ function renderTrack() {
 
   const order = ['title', 'artist', 'album', 'album_artist', 'genre', 'label',
     'track_number', 'disc_number', 'year', 'release_date', 'isrc',
-    'mix_name', 'remixer', 'composer', 'lyricist', 'key', 'bpm'];
+    'mix_name', 'remixer', 'composer', 'lyricist', 'key', 'bpm', 'artwork_url'];
   const fields = order.filter(
     (f) => resolved[f] || preview[f] || d.candidates.some((c) => c.field === f));
 
+  const artUrls = [...new Set(d.candidates
+    .filter((c) => c.field === 'artwork_url' && c.value).map((c) => c.value))];
+  const chosenArt = resolved.artwork_url?.value || preview.artwork_url?.value;
+  const embedded = t.published_path ? `/api/artwork/${t.id}` : null;
+
   $('track').innerHTML = `
+    <div class="art-row">
+      ${embedded
+        ? `<img class="art" src="${embedded}" alt="cover art"
+             onerror="this.replaceWith(Object.assign(document.createElement('div'),
+               {className:'art empty-art',textContent:'no embedded art'}))">`
+        : chosenArt
+          ? `<img class="art" src="${esc(chosenArt)}" alt="cover art">`
+          : '<div class="art empty-art">no art</div>'}
+      <div>
+        <div class="label" style="margin-bottom:.35rem">Cover art</div>
+        <div class="art-choices">
+          ${artUrls.map((u) => `<img class="art-choice ${u === chosenArt ? 'chosen' : ''}"
+              src="${esc(u)}" data-art="${esc(u)}" alt="candidate cover"
+              title="use this cover">`).join('') || '<span class="label">none offered</span>'}
+        </div>
+      </div>
+    </div>
     <audio id="audio" controls preload="none" src="/api/audio/${t.id}"></audio>
     <div style="display:flex;gap:.5rem;margin:.5rem 0 1rem">
       <button class="primary" id="accept">Accept <kbd>↵</kbd></button>
@@ -170,6 +192,13 @@ function renderTrack() {
       renderTrack();
     });
   }
+  for (const img of document.querySelectorAll('.art-choice')) {
+    img.addEventListener('click', async () => {
+      await api.setField(t.id, 'artwork_url', img.dataset.art);
+      state.detail = await api.track(t.id);
+      renderTrack();
+    });
+  }
   $('accept').addEventListener('click', acceptCurrent);
   $('url').addEventListener('change', async (e) => {
     try {
@@ -197,9 +226,14 @@ function renderCandidates(field) {
   $('side-title').textContent = 'Sources';
   $('side-field').textContent = field.replace(/_/g, ' ');
   $('side').innerHTML = options.length
-    ? options.map((c) => `<div class="cand ${c.value === resolved?.value ? 'chosen' : ''}"
-         data-value="${esc(c.value)}">
-         <span>${esc(c.value)}</span><span class="label">${esc(c.source)}</span></div>`).join('')
+    ? options.map((c) => {
+        const art = field === 'artwork_url'
+          ? `<img class="thumb" src="${esc(c.value)}" alt="">` : '';
+        const shown = field === 'artwork_url' ? '' : esc(c.value);
+        return `<div class="cand ${c.value === resolved?.value ? 'chosen' : ''}"
+          data-value="${esc(c.value)}">
+          <span>${art}${shown}</span><span class="label">${esc(c.source)}</span></div>`;
+      }).join('')
     : '<p class="empty">No source offered this field.</p>';
   for (const el of document.querySelectorAll('.cand')) {
     el.addEventListener('click', async () => {

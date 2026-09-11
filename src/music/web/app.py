@@ -5,12 +5,12 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from pydantic import BaseModel
 
 from music import config, db
 from music.arbitrate import Decision, arbitrate, persist
-from music.publish import publish_track, retag
+from music.publish import publish_track, retag, tag
 from music.sources.base import FieldCandidate
 from music.sources.url_override import parse as parse_url
 
@@ -254,6 +254,27 @@ def create_app(database: Path | None = None) -> FastAPI:
       if candidate and Path(candidate).exists():
         return FileResponse(candidate)
     raise HTTPException(status_code=404, detail="audio file missing")
+
+  @app.get("/api/artwork/{track_id}")
+  def artwork(track_id: int) -> Response:
+    """Serve the cover art embedded in a published file.
+
+    A reviewer needs to see the art before approving it; a URL in a field is
+    not a preview.
+    """
+    conn = connect()
+    row = conn.execute(
+      "SELECT published_path FROM track WHERE id = ?", (track_id,)
+    ).fetchone()
+    if row is None or not row["published_path"]:
+      raise HTTPException(status_code=404, detail="not published")
+    path = Path(row["published_path"])
+    if not path.exists():
+      raise HTTPException(status_code=404, detail="file missing")
+    data = tag.read(path).artwork
+    if not data:
+      raise HTTPException(status_code=404, detail="no embedded artwork")
+    return Response(content=data, media_type="image/jpeg", headers=no_cache)
 
   @app.post("/api/track/{track_id}/source")
   def choose_source(track_id: int, edit: FieldEdit) -> dict:

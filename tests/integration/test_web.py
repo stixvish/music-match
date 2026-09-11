@@ -164,3 +164,24 @@ def test_queue_row_falls_back_to_the_normalised_name(client):
   rows = client.get("/api/tracks").json()
   assert "norm_title" in rows[0]
   assert "norm_artist" in rows[0]
+
+
+def test_artwork_endpoint_reports_absence_clearly(client):
+  """A reviewer must be able to see the art, not just a URL (SPEC.md §15)."""
+  # nothing published yet in this fixture
+  assert client.get("/api/artwork/1").status_code == 404
+
+
+def test_artwork_is_served_once_published(client):
+  from music.publish import tag
+
+  client.post("/api/track/1/accept")
+  path = client.get("/api/tracks").json()[0]["published_path"]
+  tags = tag.read(__import__("pathlib").Path(path))
+  tags.artwork = b"\xff\xd8\xff\xe0" + b"\x00" * 64
+  tag.write(__import__("pathlib").Path(path), tags)
+
+  r = client.get("/api/artwork/1")
+  assert r.status_code == 200
+  assert r.headers["content-type"] == "image/jpeg"
+  assert r.content == tags.artwork
