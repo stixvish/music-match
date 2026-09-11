@@ -40,17 +40,22 @@ class Resolver:
     conn: sqlite3.Connection,
     musicbrainz: MusicBrainz,
     acoustid: AcoustId | None = None,
+    extra: Sequence[object] = (),
   ) -> None:
     """Initialise the resolver.
 
     Args:
       conn: Open connection.
-      musicbrainz: MusicBrainz adapter.
+      musicbrainz: MusicBrainz adapter, which supplies identity.
       acoustid: AcoustID adapter, if a key is configured.
+      extra: Additional sources — discogs, spotify, itunes. These enrich
+        **fields**; they do not establish identity, which comes from the
+        fingerprint or the MusicBrainz match above.
     """
     self._conn = conn
     self._mb = musicbrainz
     self._acoustid = acoustid
+    self._extra = list(extra)
 
   def resolve(self, identity: Identity, audio: Path | None = None) -> Resolution:
     """Identify a track.
@@ -62,12 +67,29 @@ class Resolver:
     Returns:
       The resolution, including the evidence behind it.
     """
+    resolved: Resolution | None = None
     if audio is not None and self._acoustid is not None:
       resolved = self._by_fingerprint(identity, audio)
-      if resolved is not None:
-        return resolved
-    match, candidates = self._mb.evaluate(identity)
-    return Resolution(match=match, candidates=list(candidates))
+    if resolved is None:
+      match, candidates = self._mb.evaluate(identity)
+      resolved = Resolution(match=match, candidates=list(candidates))
+
+    # enrichment only runs once identity is settled: asking five services about
+    # a track we cannot identify produces five confident answers about the
+    # wrong song.
+    if resolved.match.evidence is not Evidence.NONE:
+      resolved.candidates.extend(self._enrich(identity))
+    return resolved
+
+  def _enrich(self, identity: Identity) -> list[FieldCandidate]:
+    """Collect field candidates from the non-identity sources."""
+    out: list[FieldCandidate] = []
+    for source in self._extra:
+      try:
+        out.extend(source.lookup(identity))  # type: ignore[attr-defined]
+      except Exception as exc:  # noqa: BLE001 - one dead source is not fatal
+        log.warning("enrichment source failed: %s", exc)
+    return out
 
   def _by_fingerprint(self, identity: Identity, audio: Path) -> Resolution | None:
     matches = self._acoustid.identify(audio) if self._acoustid else []
