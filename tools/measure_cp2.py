@@ -126,7 +126,11 @@ def main() -> int:
     if rate >= 65
     else "STOP AND RETHINK"
   )
-  print(f"\n  gate: {verdict}")
+  if args.binding:
+    print(f"\n  gate (cp4, binding): {verdict}")
+    return 0 if rate >= 65 else 1
+  print(f"\n  reading: {rate:.1f}% — informational; cp4 is the binding gate")
+  print(f"  would be: {verdict}")
   return 0
 
 
