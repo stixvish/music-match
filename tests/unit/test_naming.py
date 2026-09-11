@@ -127,3 +127,55 @@ def test_split_artists_is_liberal_on_read(raw, expected):
 def test_read_then_write_normalises_any_input_convention():
   for raw in ["Alesso; Tove Lo", "Alesso, Tove Lo", "Alesso & Tove Lo"]:
     assert naming.format_artists(naming.split_artists(raw)) == "Alesso & Tove Lo"
+
+
+# --- version extraction (SPEC.md §14) --------------------------------------
+
+
+@pytest.mark.parametrize(
+  ("title", "mix_name", "remixer"),
+  [
+    # both: a person made a version
+    ("Delilah [Tom Santa Remix]", "Tom Santa Remix", "Tom Santa"),
+    ("Delilah (Tom Santa Remix)", "Tom Santa Remix", "Tom Santa"),
+    ("I'm Good (Blue) - Brooks Remix", "Brooks Remix", "Brooks"),
+    ("in plain sight (LEFTI REMIX)", "LEFTI REMIX", "LEFTI"),
+    ("Make It - H.K.G Mix", "H.K.G Mix", "H.K.G"),
+    # version only: no person named
+    ("Say Nothing - Extended Mix", "Extended Mix", ""),
+    ("Song (Radio Edit)", "Radio Edit", ""),
+    ("Track (Original Mix)", "Original Mix", ""),
+    ("Track (Club Mix)", "Club Mix", ""),
+    ("Track (Instrumental Version)", "Instrumental Version", ""),
+    # not a person: a year, a re-recording, a generic label
+    ("I'm Not Alone (2019 Edit)", "2019 Edit", ""),
+    ("Love Story (Taylor's Version)", "Taylor's Version", ""),
+    ("Love Story (Taylor\u2019s Version)", "Taylor\u2019s Version", ""),
+    # but a named remix keeps its remixer even with an ampersand
+    (
+      "Despacito (Major Lazer & MOSKA remix)",
+      "Major Lazer & MOSKA remix",
+      "Major Lazer & MOSKA",
+    ),
+    # neither
+    ("Summer", "", ""),
+    ("Mood (ft. iann dior)", "", ""),
+    ("", "", ""),
+  ],
+)
+def test_extract_version(title, mix_name, remixer):
+  version = naming.extract_version(title)
+  assert (version.mix_name, version.remixer) == (mix_name, remixer)
+
+
+def test_mix_name_and_remixer_are_different_fields():
+  """mix_name is which version; remixer is who made it (SPEC.md §14)."""
+  extended = naming.extract_version("Track - Extended Mix")
+  assert extended.mix_name and not extended.remixer
+
+  remixed = naming.extract_version("Track [Someone Remix]")
+  assert remixed.mix_name and remixed.remixer
+
+
+def test_featured_clause_is_not_a_version():
+  assert naming.extract_version("Mood (ft. iann dior)").mix_name == ""

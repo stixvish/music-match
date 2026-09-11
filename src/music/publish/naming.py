@@ -15,6 +15,7 @@ conflate the two.
 import re
 import unicodedata
 from collections.abc import Sequence
+from dataclasses import dataclass
 
 # "feat.", "featuring", "ft" -> "ft."
 _FEAT = re.compile(r"\b(?:feat\.?|featuring|ft\.?)\s+", re.IGNORECASE)
@@ -102,6 +103,107 @@ def safe_component(raw: str) -> str:
   if set(text) <= {"."}:
     return "unknown"
   return text[:120].strip() or "unknown"
+
+
+# version labels that describe a cut rather than name a person. "Extended Mix"
+# has no remixer; "Tom Santa Remix" does.
+GENERIC_VERSIONS = (
+  "extended",
+  "original",
+  "radio",
+  "club",
+  "instrumental",
+  "acapella",
+  "a cappella",
+  "vip",
+  "dub",
+  "intro",
+  "short",
+  "clean",
+  "explicit",
+)
+
+_VERSION_WORD = re.compile(
+  r"\b(remix|mix|edit|rework|flip|bootleg|version|dub)\b", re.IGNORECASE
+)
+
+
+@dataclass(frozen=True)
+class Version:
+  """A track's version designation, split into label and person."""
+
+  mix_name: str = ""
+  remixer: str = ""
+
+
+def extract_version(title: str) -> Version:
+  """Pull the mix name and remixer out of a title (SPEC.md §14).
+
+  `mix_name` is *which version*; `remixer` is *who made it*. They diverge
+  often — "Extended Mix" is a version with no remixer, while "Tom Santa Remix"
+  is both::
+
+      "Delilah [Tom Santa Remix]"   -> mix_name="Tom Santa Remix", remixer="Tom Santa"
+      "Say Nothing - Extended Mix"  -> mix_name="Extended Mix",    remixer=""
+      "Summer"                      -> mix_name="",                remixer=""
+
+  Args:
+    title: A title in canonical or raw form.
+
+  Returns:
+    The extracted version, empty when the title carries none.
+  """
+  text = _SPACES.sub(" ", (title or "").strip())
+  if not text:
+    return Version()
+
+  label = ""
+  bracketed = _MIX.search(text)
+  if bracketed:
+    label = bracketed.group(1).strip()
+  else:
+    dashed = _MIX_DASH.search(text)
+    if dashed:
+      label = dashed.group(1).strip()
+  if not label:
+    return Version()
+
+  # the remixer is whatever precedes the version word, unless that text is not
+  # a person.
+  match = _VERSION_WORD.search(label)
+  person = label[: match.start()].strip(" -–") if match else ""
+  if not _is_person(person, match.group(1) if match else ""):
+    person = ""
+  return Version(mix_name=label, remixer=person)
+
+
+def _is_person(text: str, version_word: str) -> bool:
+  """Whether the text before a version word names a remixer.
+
+  Rejects, in order of how often they were seen in the real library:
+
+  - generic version labels: "Extended Mix" has no remixer
+  - years: "2019 Edit" is a reissue, not a person
+  - possessives before "Version": "Taylor's Version" is a re-recording by the
+    original artist, not a remix by someone else
+
+  Args:
+    text: The text preceding the version word.
+    version_word: The matched version word itself.
+
+  Returns:
+    True if `text` names a remixer.
+  """
+  candidate = text.strip()
+  if not candidate:
+    return False
+  if any(word in candidate.casefold() for word in GENERIC_VERSIONS):
+    return False
+  if re.fullmatch(r"[\d\s'\u2019-]+", candidate):
+    return False
+  if version_word.casefold() == "version" and re.search(r"['’]s$", candidate):
+    return False
+  return True
 
 
 def format_artists(artists: Sequence[str]) -> str:
