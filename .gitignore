@@ -1,7 +1,28 @@
-.DS_Store
+# credentials — never commit. see SPEC.md §13.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+cookies.txt
+
+# python
 __pycache__/
 *.pyc
 .venv/
 venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# data / build artefacts
 models/
 out/
+library/
+.staging/
+*.db
+
+# macos
+.DS_Store
