@@ -133,3 +133,34 @@ def test_free_port_returns_the_preferred_one_when_open():
   from music.cli import _free_port
 
   assert _free_port(0, tries=1) == 0 or _free_port(8899, tries=1) is not None
+
+
+def test_accepting_a_reviewed_track_publishes_it(client, tmp_path):
+  """Approving a reviewed track publishes it.
+
+  A low-confidence track is never arbitrated by the pipeline (SPEC.md §12), so
+  approving one must do that work — otherwise accept clears the queue and
+  leaves an untagged file that was never published.
+  """
+  before = client.get("/api/track/1").json()
+  assert not any(r["field"] == "label" for r in before["resolved"])
+
+  r = client.post("/api/track/1/accept").json()
+  assert r["ok"], r
+  after = client.get("/api/tracks").json()[0]
+  assert after["status"] == "published"
+  assert after["published_path"]
+
+
+def test_accept_preserves_a_manual_edit(client):
+  client.post("/api/track/1/field", json={"field": "genre", "value": "Mine"})
+  client.post("/api/track/1/accept")
+  resolved = {r["field"]: r for r in client.get("/api/track/1").json()["resolved"]}
+  assert resolved["genre"]["value"] == "Mine"
+  assert resolved["genre"]["decided_by"] == "manual"
+
+
+def test_queue_row_falls_back_to_the_normalised_name(client):
+  rows = client.get("/api/tracks").json()
+  assert "norm_title" in rows[0]
+  assert "norm_artist" in rows[0]

@@ -49,17 +49,36 @@ const api = {
   },
 };
 
-const state = { list: [], index: 0, detail: null, field: null, filter: 'review' };
+const state = { list: [], counts: {}, index: 0, detail: null, field: null, filter: 'review' };
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 async function loadQueue() {
-  state.list = await api.tracks(state.filter === 'all' ? undefined : state.filter);
-  $('queue-count').textContent = `${state.list.length} ${state.filter}`;
+  const all = await api.tracks();
+  state.counts = all.reduce((acc, t) => (acc[t.status] = (acc[t.status] || 0) + 1, acc), {});
+  state.counts.all = all.length;
+  state.list = state.filter === 'all' ? all : all.filter((t) => t.status === state.filter);
+  renderTabs();
   renderQueue();
   if (state.list.length) selectIndex(Math.min(state.index, state.list.length - 1));
   else { $('track').innerHTML = '<p class="empty">Queue is clear.</p>'; $('side').innerHTML = ''; }
+}
+
+function renderTabs() {
+  const c = state.counts;
+  // wayfinding: the counts answer "what's here", the tabs "where can I go"
+  $('queue-count').innerHTML = ['review', 'published', 'all']
+    .map((f) => `<button class="tab" data-f="${f}" aria-pressed="${state.filter === f}">
+      ${f} ${c[f] || 0}</button>`)
+    .join('');
+  for (const el of document.querySelectorAll('.tab')) {
+    el.addEventListener('click', () => {
+      state.filter = el.dataset.f;
+      state.index = 0;
+      loadQueue();
+    });
+  }
 }
 
 function renderQueue() {
@@ -70,8 +89,8 @@ function renderQueue() {
       t.identity_confidence != null ? `<span class="pill">${t.identity_confidence.toFixed(2)}</span>` : '',
     ].join(' ');
     return `<div class="item" role="option" data-i="${i}" aria-selected="${i === state.index}">
-      <div class="t">${esc(t.title || t.channel || `track ${t.id}`)}</div>
-      <div class="s">${esc(t.artist || '—')}</div>
+      <div class="t">${esc(t.title || t.norm_title || `track ${t.id}`)}</div>
+      <div class="s">${esc(t.artist || t.norm_artist || t.channel || '')}</div>
       <div style="margin-top:.25rem">${pills}</div>
     </div>`;
   }).join('') || '<p class="empty">Nothing to review.</p>';
@@ -99,6 +118,8 @@ function renderTrack() {
   if (!d) return;
   const t = d.track;
   const resolved = Object.fromEntries(d.resolved.map((r) => [r.field, r]));
+  // what Accept will choose, so the button is predictable
+  const preview = Object.fromEntries((d.preview || []).map((r) => [r.field, r]));
   $('track-title').textContent = resolved.title?.value || t.norm_title || `track ${t.id}`;
   $('track-meta').textContent =
     `${t.genre_family || 'unrouted'} · confidence ${t.identity_confidence ?? '—'}`;
@@ -106,7 +127,8 @@ function renderTrack() {
   const order = ['title', 'artist', 'album', 'album_artist', 'genre', 'label',
     'track_number', 'disc_number', 'year', 'release_date', 'isrc',
     'mix_name', 'remixer', 'composer', 'lyricist', 'key', 'bpm'];
-  const fields = order.filter((f) => resolved[f] || d.candidates.some((c) => c.field === f));
+  const fields = order.filter(
+    (f) => resolved[f] || preview[f] || d.candidates.some((c) => c.field === f));
 
   $('track').innerHTML = `
     <audio id="audio" controls preload="none" src="/api/audio/${t.id}"></audio>
@@ -118,12 +140,18 @@ function renderTrack() {
       const r = resolved[f];
       const by = r?.decided_by === 'manual' ? 'manual'
         : r?.decided_by === 'fallback' ? 'fallback' : '';
+      const opts = d.candidates.filter((c) => c.field === f);
+      const p = preview[f];
+      // an unresolved track still has candidates — a low-confidence track is
+      // never arbitrated, so without this the whole review screen reads "unset"
+      const hint = p
+        ? `would pick ${p.source}`
+        : opts.length ? `${opts.length} sources — pick one` : 'no source offered this';
       return `<div class="field" data-field="${f}" data-focused="${state.field === f}">
         <span class="label">${f.replace(/_/g, ' ')}</span>
-        <span>
-          <input value="${esc(r?.value ?? '')}" data-field="${f}">
-          <span class="src ${by}">${esc(r?.source ?? 'unset')}${by ? ` · ${by}` : ''}</span>
-        </span>
+        <input value="${esc(r?.value ?? '')}" data-empty="${!r?.value}"
+               placeholder="${esc(p?.value ?? opts[0]?.value ?? '')}" data-field="${f}">
+        <span class="src ${by}">${esc(r?.source ?? hint)}${by ? ` · ${by}` : ''}</span>
       </div>`;
     }).join('')}
     <p class="label" style="margin-top:1rem">
@@ -149,7 +177,9 @@ function renderTrack() {
       e.target.value = `${r.provider} ${r.kind} ${r.id}`;
     } catch (err) { e.target.value = ''; e.target.placeholder = err.message; }
   });
-  if (state.field) renderCandidates(state.field);
+  const first = state.field && fields.includes(state.field) ? state.field : fields[0];
+  if (first) focusField(first);
+  else $('side').innerHTML = '<p class="empty">No fields yet.</p>';
 }
 
 function focusField(field) {

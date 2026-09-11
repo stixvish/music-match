@@ -58,7 +58,7 @@ h2 { font-size: 1.0625rem; line-height: 1.3; letter-spacing: -0.012em; margin: 0
 #app { display: grid; grid-template-columns: 19rem 1fr 21rem; height: 100vh; }
 @media (max-width: 60rem) { #app { grid-template-columns: 1fr; overflow: auto; } }
 
-.pane { overflow-y: auto; padding: var(--space); min-width: 0; }
+.pane { overflow-y: auto; padding: 0 var(--space) var(--space); min-width: 0; }
 .pane + .pane { border-left: 1px solid var(--line); }
 
 /* translucent chrome: content scrolls underneath, no opaque strip */
@@ -67,7 +67,7 @@ h2 { font-size: 1.0625rem; line-height: 1.3; letter-spacing: -0.012em; margin: 0
   top: 0;
   z-index: 2;
   padding: 0.75rem var(--space);
-  margin: calc(var(--space) * -1) calc(var(--space) * -1) 0;
+  margin: 0 calc(var(--space) * -1) 0.75rem;
   background: var(--surface);
   backdrop-filter: blur(20px) saturate(180%);
   -webkit-backdrop-filter: blur(20px) saturate(180%);
@@ -104,16 +104,19 @@ h2 { font-size: 1.0625rem; line-height: 1.3; letter-spacing: -0.012em; margin: 0
 /* --- fields ------------------------------------------------------------- */
 
 .field {
-  display: grid; grid-template-columns: 8.5rem 1fr; gap: 0.5rem;
+  display: grid; grid-template-columns: 8.5rem 1fr auto; gap: 0.5rem;
   align-items: center; padding: 0.3rem 0.5rem; border-radius: var(--r-sm);
 }
+.field .src { justify-self: end; white-space: nowrap; }
 .field:hover { background: var(--surface-solid); }
 .field[data-focused="true"] { background: var(--surface-solid); outline: 2px solid var(--accent); }
 .field input {
   width: 100%; font: inherit; font-size: 0.9375rem; color: var(--text);
-  background: transparent; border: 1px solid transparent; border-radius: var(--r-sm);
-  padding: 0.25rem 0.4rem;
+  background: var(--surface-solid); border: 1px solid var(--line);
+  border-radius: var(--r-sm); padding: 0.25rem 0.4rem;
 }
+.field input::placeholder { color: var(--muted); opacity: 0.7; }
+.field input[data-empty="true"] { border-style: dashed; }
 .field input:focus { background: var(--surface-solid); border-color: var(--accent); outline: none; }
 .field .src { font-size: 0.6875rem; color: var(--muted); }
 .field .src.manual { color: var(--accent); font-weight: 600; }
@@ -162,3 +165,14 @@ kbd {
 @media (prefers-contrast: more) {
   :root { --line: currentColor; --surface: var(--surface-solid); }
 }
+
+/* --- status filter ------------------------------------------------------ */
+
+.tabs { display: flex; gap: 0.25rem; }
+.tab {
+  font-size: 0.75rem; padding: 0.2rem 0.55rem; border-radius: 999px;
+  border: 1px solid var(--line); background: transparent; color: var(--muted);
+  cursor: pointer;
+}
+.tab[aria-pressed="true"] { background: var(--surface-solid); color: var(--text); font-weight: 600; }
+.tab:active { transform: scale(0.97); }

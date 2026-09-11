@@ -9,8 +9,9 @@ from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 
 from music import config, db
-from music.arbitrate import Decision, persist
-from music.publish import retag
+from music.arbitrate import Decision, arbitrate, persist
+from music.publish import publish_track, retag
+from music.sources.base import FieldCandidate
 from music.sources.url_override import parse as parse_url
 
 STATIC = Path(__file__).parent / "static"
@@ -54,15 +55,24 @@ def create_app(database: Path | None = None) -> FastAPI:
 
   @app.get("/", response_class=HTMLResponse)
   def index() -> HTMLResponse:
-    return HTMLResponse((STATIC / "index.html").read_text(encoding="utf-8"))
+    return HTMLResponse(
+      (STATIC / "index.html").read_text(encoding="utf-8"),
+      headers={"Cache-Control": "no-store, max-age=0"},
+    )
+
+  # served with no-store: this is a local tool that is edited while running,
+  # and a cached app.js silently shows stale behaviour that looks like a bug.
+  no_cache = {"Cache-Control": "no-store, max-age=0"}
 
   @app.get("/app.css")
   def stylesheet() -> FileResponse:
-    return FileResponse(STATIC / "app.css", media_type="text/css")
+    return FileResponse(STATIC / "app.css", media_type="text/css", headers=no_cache)
 
   @app.get("/app.js")
   def script() -> FileResponse:
-    return FileResponse(STATIC / "app.js", media_type="text/javascript")
+    return FileResponse(
+      STATIC / "app.js", media_type="text/javascript", headers=no_cache
+    )
 
   @app.get("/api/tracks")
   def tracks(status: str | None = None) -> list[dict]:
@@ -78,7 +88,7 @@ def create_app(database: Path | None = None) -> FastAPI:
       "  WHERE track_id=t.id AND field='artist') artist,"
       " (SELECT value FROM resolved_field"
       "  WHERE track_id=t.id AND field='title') title,"
-      " s.channel, s.duration_s"
+      " t.norm_artist, t.norm_title, s.channel, s.duration_s"
       " FROM track t"
       " JOIN source_file s ON s.id = t.source_file_id"
       " LEFT JOIN review_queue q ON q.track_id = t.id"
@@ -98,6 +108,36 @@ def create_app(database: Path | None = None) -> FastAPI:
     ).fetchone()
     if head is None:
       raise HTTPException(status_code=404, detail="no such track")
+    candidates = _rows(
+      conn,
+      "SELECT field, value, source, confidence FROM field_candidate"
+      " WHERE track_id=? ORDER BY field, source",
+      track_id,
+    )
+    # what Accept would actually choose. showing a raw candidate instead makes
+    # the button unpredictable: "Various Artists" reads as the album artist
+    # even though arbitration rejects compilations outright (§7).
+    preview = [
+      {
+        "field": d.field,
+        "value": d.value,
+        "source": d.source,
+        "decided_by": d.decided_by,
+      }
+      for d in arbitrate(
+        [
+          FieldCandidate(
+            field=c["field"],
+            value=c["value"],
+            source=c["source"],
+            confidence=c["confidence"] or 1.0,
+          )
+          for c in candidates
+          if c["value"]
+        ],
+        family=head["genre_family"] or "other",
+      )
+    ]
     return {
       "track": dict(head),
       "resolved": _rows(
@@ -106,12 +146,8 @@ def create_app(database: Path | None = None) -> FastAPI:
         " WHERE track_id=? ORDER BY field",
         track_id,
       ),
-      "candidates": _rows(
-        conn,
-        "SELECT field, value, source, confidence FROM field_candidate"
-        " WHERE track_id=? ORDER BY field, source",
-        track_id,
-      ),
+      "candidates": candidates,
+      "preview": preview,
     }
 
   @app.post("/api/track/{track_id}/field")
@@ -128,19 +164,60 @@ def create_app(database: Path | None = None) -> FastAPI:
 
   @app.post("/api/track/{track_id}/accept")
   def accept(track_id: int) -> dict:
-    """Clear a track from the review queue and re-tag it if published."""
+    """Approve a reviewed track: arbitrate, publish, and clear the queue.
+
+    A low-confidence track is never arbitrated by the pipeline (SPEC.md §12),
+    so approving one has to do that work now — otherwise accepting would clear
+    the queue and leave an untagged file that was never published.
+
+    Manual edits survive: `persist` skips anything already decided by hand.
+    """
     conn = connect()
-    conn.execute(
-      "UPDATE review_queue SET resolved_at = datetime('now') WHERE track_id = ?",
-      (track_id,),
-    )
+    row = conn.execute(
+      "SELECT genre_family, published_path FROM track WHERE id=?", (track_id,)
+    ).fetchone()
+    if row is None:
+      raise HTTPException(status_code=404, detail="no such track")
+
+    candidates = [
+      FieldCandidate(
+        field=r["field"],
+        value=r["value"],
+        source=r["source"],
+        confidence=r["confidence"] or 1.0,
+      )
+      for r in conn.execute(
+        "SELECT field, value, source, confidence FROM field_candidate WHERE track_id=?",
+        (track_id,),
+      )
+      if r["value"]
+    ]
+    if candidates:
+      persist(
+        conn, track_id, arbitrate(candidates, family=row["genre_family"] or "other")
+      )
+
     conn.execute("DELETE FROM review_queue WHERE track_id = ?", (track_id,))
+    published = row["published_path"]
+    if published:
+      result = retag(conn, track_id)
+      published = str(result) if result else published
+    else:
+      try:
+        published = str(
+          publish_track(conn, track_id, cfg.paths.library, cfg.paths.staging)
+        )
+      except Exception as exc:  # noqa: BLE001 - report, do not 500 the ui
+        conn.execute(
+          "UPDATE track SET status='failed', error=? WHERE id=?",
+          (str(exc)[:300], track_id),
+        )
+        return {"ok": False, "error": str(exc)}
     conn.execute(
-      "UPDATE track SET status='auto', updated_at=datetime('now') WHERE id=?",
+      "UPDATE track SET status='published', updated_at=datetime('now') WHERE id=?",
       (track_id,),
     )
-    path = retag(conn, track_id)
-    return {"ok": True, "retagged": str(path) if path else None}
+    return {"ok": True, "published": published}
 
   @app.post("/api/track/{track_id}/url")
   def url_override(track_id: int, body: UrlOverride) -> dict:
