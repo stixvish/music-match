@@ -14,9 +14,10 @@ about the product go in the spec, decisions about process go here.
 
 ## commits
 
-- **conventional commits, short and sweet.** `type(scope): subject`, subject in
-  lowercase, imperative, under ~60 chars. body only when the *why* is not
-  obvious from the diff.
+- **conventional commits, short.** `type(scope): subject`, lowercase,
+  imperative, **under 70 characters**.
+- **no body.** if the why matters, it belongs in `spec.md`, not a commit
+  message. the spec is the record; commits are pointers.
 - types: `feat` `fix` `docs` `refactor` `test` `chore`.
 - **never add claude as a co-author.** no `Co-Authored-By`, no
   `Generated with` trailers. these are the user's commits.
@@ -50,7 +51,6 @@ docs(spec): record opus vs aac spectral measurement
 ## repo layout
 
 ```
-spec.md              what we are building, and the evidence for it
-claude.md            this file — how we work
-tools/format-probe/  reproducible proof for spec.md §10
+spec.md    what we are building, and the evidence for it
+claude.md  this file — how we work
 ```
