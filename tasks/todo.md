@@ -1,27 +1,27 @@
 # todo
 
-`[ ]` open · `[x]` done · **cp** = checkpoint, a hard stop (see `plan.md`)
+`[ ]` open · `[x]` done · `[>]` awaiting human verification · **cp** = checkpoint, a hard stop (see `plan.md`)
 
 ## phase 0 — walking skeleton
 
-- [ ] **t1** scaffold `src/music/`, uv project, one passing test
+- [x] **t1** scaffold `src/music/`, uv project, one passing test
   - accept: `uv run pytest` green; `ruff format --check` green; mypy green
   - verify: write a 2-space-indented file, confirm ruff keeps it at 2
-- [ ] **t2** `db/`: schema.sql (§11), migrate, connection module
+- [x] **t2** `db/`: schema.sql (§11), migrate, connection module
   - accept: all 7 tables created; migrate is idempotent
   - verify: run twice, second is a no-op; `sqlite3 .schema` matches §11
-- [ ] **t3** stage runner: resumable, driven by `track.stage`
+- [x] **t3** stage runner: resumable, driven by `track.stage`
   - accept: kill mid-run, restart, resumes at the same track
   - verify: integration test kills after track 3 of 5, asserts resume at 4
-- [ ] **t4** `acquire`: one youtube url → staging file + `source_file` row
+- [x] **t4** `acquire`: one youtube url → staging file + `source_file` row
   - accept: file on disk; row has sha256, duration, itag, channel
   - verify: `-m live` test on one art track
-- [ ] **t5** transcode → aiff (`pcm_s16be`) + write `TIT2`/`TPE1`
+- [x] **t5** transcode → aiff (`pcm_s16be`) + write `TIT2`/`TPE1`
   - accept: output is 16-bit 44.1 stereo; both frames read back
   - verify: unit test on ffmpeg-synthesized audio (§19) — no committed binaries
-- [ ] **t6** publish to `library/` (flat for now; layout comes in t23)
-- [ ] **t7** wire `music ingest <url>` through all of the above
-- [ ] **cp1** import the result into rekordbox **and** serato; both display it
+- [x] **t6** publish to `library/` (flat for now; layout comes in t23)
+- [x] **t7** wire `music ingest <url>` through all of the above
+- [>] **cp1** import the result into rekordbox **and** serato; both display it
 
 ## phase 1 — normalise + accuracy spike
 
