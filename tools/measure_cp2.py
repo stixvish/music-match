@@ -1,7 +1,11 @@
-"""cp2 — measure high-confidence resolution rate (tasks/plan.md).
+"""Measure high-confidence resolution rate (tasks/plan.md).
 
 The 5-hour review budget in SPEC.md §9 rests on ~85% auto-accept, projected
 from a measured 55% baseline. This measures the real number.
+
+Run it at every checkpoint so the trend is visible. The thresholds below are
+**binding only at cp4**, once every source exists and the audio has been
+re-downloaded as art tracks; earlier readings are informational.
 
   >=75%   proceed
   65-75%  proceed, revise the budget
@@ -48,6 +52,11 @@ def main() -> int:
   parser.add_argument("library_jsonl")
   parser.add_argument("--n", type=int, default=100)
   parser.add_argument("--seed", type=int, default=42)
+  parser.add_argument(
+    "--binding",
+    action="store_true",
+    help="apply the cp4 gate; without it the verdict is informational",
+  )
   args = parser.parse_args()
 
   rows = [
