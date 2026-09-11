@@ -145,7 +145,14 @@ def test_video_rip_is_flagged_and_queued(conn, synth_audio):
 
 
 def test_is_art_track_property():
-  base = dict(video_id="x", path=None, title="T", duration_s=1.0, abr=256.0, itag="141")
+  base = {
+    "video_id": "x",
+    "path": None,
+    "title": "T",
+    "duration_s": 1.0,
+    "abr": 256.0,
+    "itag": "141",
+  }
   assert Download(**base, channel="Artist - Topic", description="").is_art_track
   assert Download(
     **base, channel="Some Channel", description="Provided to YouTube by X"
