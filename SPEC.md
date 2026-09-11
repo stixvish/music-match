@@ -166,7 +166,7 @@ that a fresh download provides. It never outranks a real source.
 |---|---|
 | artist / title / mix name | Beatport (electronic) → Discogs → MusicBrainz → Spotify |
 | featured vs. collaborating artists | **MusicBrainz** (models artist-credit; Spotify flattens) |
-| genre / style | Discogs Style → Beatport → MusicBrainz → *(last resort)* Essentia top-level |
+| genre / style | Beatport *(electronic)* → Discogs Style → MusicBrainz → *(last resort)* Essentia top-level |
 | label / catalog no. | Discogs → Beatport |
 | release date | MusicBrainz release-group (original, not reissue) → Spotify |
 | artwork | iTunes Search API |
@@ -221,6 +221,34 @@ are answers to different questions and must be sourced separately.
 
 Guard against bad catalogue data: ignore dates before 1900 or in the future, and
 prefer a date with full day precision over a bare year when both exist.
+
+### why beatport matters, measured
+
+Not for taxonomy granularity — the opposite, in fact. Genre labels embedded in
+purchased Beatport files are **coarser** than Discogs Style:
+
+```
+Tiesto - All Nighter    beatport: "Dance / Electro Pop"    discogs: "Progressive House"
+```
+
+It matters for **coverage of recent digital-only electronic releases**, where
+Discogs is a physical-media-first database and simply has nothing:
+
+```
+7 purchased beatport tracks (2023-2026):   discogs found style for 1  (14%)
+25 general electronic tracks (mixed era):  discogs found style for 22 (88%)
+```
+
+Future downloads are mostly electronic, so this gap widens over time rather
+than closing. Beatport therefore ranks **first for genre on electronic**, and
+Discogs remains first elsewhere.
+
+**Access is unresolved.** The v4 API is OAuth-gated to approved partners and
+the public site is behind a bot challenge, so there is no implementable
+transport yet. The adapter is built against the `Source` interface with the
+transport left unimplemented; if partner access is granted it is one function
+and nothing else changes. This is the reason §7 isolated Beatport behind an
+adapter in the first place.
 
 ### artist query strategy
 
