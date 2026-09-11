@@ -21,7 +21,7 @@
   - verify: unit test on ffmpeg-synthesized audio (§19) — no committed binaries
 - [x] **t6** publish to `library/` (flat for now; layout comes in t23)
 - [x] **t7** wire `music ingest <url>` through all of the above
-- [>] **cp1** import the result into rekordbox **and** serato; both display it
+- [x] **cp1** import the result into rekordbox **and** serato; both display it
 
 ## phase 1 — normalise + accuracy spike
 
@@ -69,6 +69,8 @@
 - [ ] **cp5** **bollywood gate** — 30 bollywood tracks, families sane
 - [ ] **t24** `arbitrate.py` + `precedence` table, pure
   - accept: confidence gates entry, not ranking (§12); first source wins
+  - accept: album fields resolved as a group from one release; deluxe
+    preferred; dates still come from the release-group's first release (§7)
 
 ## phase 5 — publish quality
 
