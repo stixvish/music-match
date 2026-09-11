@@ -102,6 +102,9 @@
   thread, live progress. ingest extracted from `cli` into `pipeline`.
 - [x] **t31c** pipeline console: real yt-dlp output, per-stage counters,
   `music reset` for a clean end-to-end run
+- [x] **t35** arbitration accuracy: agreement beats precedence on every
+  factual field; compilation test uses the arbitrated artist; unbracketed
+  album editions group. 12 wrong artists and 12 wrong albums -> 0 (§12)
 - [ ] **cp7** review 50 real items, measure seconds/item vs §9's assumed 35 s
 
 ## phase 7 — the real run

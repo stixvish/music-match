@@ -19,7 +19,16 @@ import sqlite3
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 
+from music.publish.naming import split_artists, strip_version
 from music.sources.base import ALBUM_GROUP, FieldCandidate
+
+# Fields where agreement between sources is evidence rather than mere
+# popularity, because exactly one value is correct. `genre` is excluded: sources
+# disagree in granularity by design, and two coarse sources both saying "Dance"
+# must not outrank Discogs' "Progressive House" — that ranking is what
+# elicitation calibrates (§9). `artwork_url` is excluded because several covers
+# are all genuinely correct.
+JUDGEMENT_FIELDS = ("genre", "artwork_url")
 
 # dates are not chosen by precedence. SPEC.md §7 wants the *earliest* release
 # of the recording, and sources disagree in both value and precision: for
@@ -37,13 +46,36 @@ COMPILATION_CREDITS = frozenset(
 NON_LABELS = frozenset({"not on label", "self-released", "none", "unknown"})
 
 # edition markers, matched against an album title (SPEC.md §7)
-DELUXE_WORDS = ("deluxe", "expanded", "special", "anniversary", "complete", "extended")
+DELUXE_WORDS = (
+  "deluxe",
+  "expanded",
+  "special",
+  "anniversary",
+  "complete",
+  "extended",
+  # David Guetta ships "Nothing But the Beat", "Nothing but the Beat 2.0" and
+  # "Nothing But the Beat Ultimate"; the last is the fullest.
+  "ultimate",
+)
 _EDITION_SUFFIX = re.compile(
   r"\s*[\(\[][^)\]]*\b(?:"
   + "|".join(DELUXE_WORDS)
   + r"|version|edition)\b[^)\]]*[\)\]]\s*$",
   re.IGNORECASE,
 )
+# The same markers written without brackets. Without this, "Nothing But the
+# Beat", "Nothing but the Beat 2.0" and "Nothing But the Beat Ultimate" are
+# three unrelated albums, one per source, so no group ever agrees and the
+# edition each track lands on is decided by whichever source happens to rank
+# first — which is why one Guetta track got 2.0 and another got Ultimate.
+_EDITION_TAIL = re.compile(
+  r"\s+(?:" + "|".join(DELUXE_WORDS) + r"|remastered|reissue)"
+  r"(?:\s+(?:edition|version))?\s*$",
+  re.IGNORECASE,
+)
+# A decimal version suffix only: a bare trailing integer is part of the title
+# far more often than it is an edition ("Kidz Bop 22", "Blink-182").
+_VERSION_TAIL = re.compile(r"\s+\d+\.\d+\s*$")
 
 
 def _album_key(title: str) -> str:
@@ -58,6 +90,13 @@ def _album_key(title: str) -> str:
     A normalised grouping key.
   """
   base = _EDITION_SUFFIX.sub("", title or "")
+  # strip repeatedly: "Nothing But the Beat 2.0 (Deluxe)" carries both forms
+  for pattern in (_VERSION_TAIL, _EDITION_TAIL):
+    while True:
+      stripped = pattern.sub("", base)
+      if stripped == base:
+        break
+      base = stripped
   return "".join(ch for ch in base.casefold() if ch.isalnum())
 
 
@@ -199,7 +238,7 @@ def _is_compilation(
 
 
 def _best_album_source(
-  candidates: Sequence[FieldCandidate], ranked: Iterable[str]
+  candidates: Sequence[FieldCandidate], ranked: Iterable[str], artist: str = ""
 ) -> str | None:
   """Pick one source to supply every album field.
 
@@ -212,6 +251,10 @@ def _best_album_source(
   Args:
     candidates: All candidates for a track.
     ranked: Sources in precedence order.
+    artist: The *arbitrated* artist. Compilation detection compares each
+      source's album credit against it, so passing an arbitrary candidate
+      inverts the test: when a bad source won `artist`, every correct album
+      looked like a compilation and was discarded.
 
   Returns:
     The winning source name, or None if no source offers any album field.
@@ -223,9 +266,14 @@ def _best_album_source(
   if not offered:
     return None
 
-  artist = next((c.value for c in candidates if c.field == "artist" and c.value), "")
   real = [s for s in offered if not _is_compilation(candidates, s, artist)]
-  pool = real or list(offered)
+  if not real:
+    # every source offered only a compilation. "Down" resolved to
+    # "Ultra Dance 11" credited to DJ Enferno, which is where the track was
+    # licensed, not the album it belongs to. No album is honest; a wrong one
+    # is not, and it propagates into the filename and both DJ apps.
+    return None
+  pool = real
   albums = {
     c.source: c.value
     for c in candidates
@@ -253,9 +301,17 @@ def _best_album_source(
   winning = min(groups.items(), key=group_rank)[1]
 
   # within the winning album, prefer the largest edition (SPEC.md §7)
-  def edition_rank(source: str) -> tuple[int, int]:
-    deluxe = any(w in albums[source].casefold() for w in DELUXE_WORDS)
-    return (-int(deluxe), order.index(source) if source in order else len(order))
+  def edition_rank(source: str) -> tuple[int, int, int]:
+    title = albums[source].casefold()
+    deluxe = any(w in title for w in DELUXE_WORDS)
+    # a numbered reissue ("2.0") is fuller than the plain album but not as
+    # full as a named deluxe edition
+    numbered = bool(_VERSION_TAIL.search(albums[source]))
+    return (
+      -int(deluxe),
+      -int(numbered),
+      order.index(source) if source in order else len(order),
+    )
 
   return min(winning, key=edition_rank)
 
@@ -284,8 +340,19 @@ def arbitrate(
 
   decisions: list[Decision] = []
 
+  # the artist is decided first: the album group's compilation test is
+  # relative to it, so it has to be the arbitrated value rather than whichever
+  # candidate happens to come first.
+  artist_options = by_field.get("artist", [])
+  artist_winner = (
+    _consensus(artist_options, ranking(family, "artist"), "artist")
+    if artist_options
+    else None
+  )
+  artist_value = artist_winner.value if artist_winner else ""
+
   # album fields come from a single source, chosen once (SPEC.md §7)
-  album_source = _best_album_source(candidates, ranking(family, "album"))
+  album_source = _best_album_source(candidates, ranking(family, "album"), artist_value)
   for field in ALBUM_GROUP:
     if album_source is None:
       break
@@ -305,7 +372,13 @@ def arbitrate(
       decisions.append(Decision(field, chosen.value, chosen.source))
       continue
     ranked = ranking(family, field)
-    winner = next((c for source in ranked for c in options if c.source == source), None)
+    winner = (
+      _consensus(options, ranked, field) if field not in JUDGEMENT_FIELDS else None
+    )
+    if winner is None:
+      winner = next(
+        (c for source in ranked for c in options if c.source == source), None
+      )
     if winner is not None:
       decisions.append(Decision(field, winner.value, winner.source))
       continue
@@ -316,6 +389,107 @@ def arbitrate(
     decisions.append(Decision(field, spare.value, spare.source, decided_by="fallback"))
 
   return sorted(decisions, key=lambda d: d.field)
+
+
+def _consensus(
+  options: Sequence[FieldCandidate], ranked: Sequence[str], field: str = ""
+) -> FieldCandidate | None:
+  """Choose a value, letting sources that agree outweigh one ranked higher.
+
+  This is the album rule (`_best_album_source`) applied to every other factual
+  field, which is where it was missing and where it cost the most. Measured on
+  the first hundred-track run: for "Last Night", iTunes and Spotify both
+  returned `Morgan Wallen - Last Night` and MusicBrainz returned
+  `Metro Station - California`; MusicBrainz ranks first for pop, so it won both
+  `artist` and `title` and the track was published as the wrong song. Twelve of
+  eighty-three published tracks failed this way.
+
+  Agreement is counted in distinct sources, and ties fall back to precedence,
+  so a field only one source offers behaves exactly as before.
+
+  Args:
+    options: Candidates for one field, all non-empty.
+    ranked: Sources in precedence order.
+    field: Field name, which decides how values are loosened when nothing
+      agrees exactly.
+
+  Returns:
+    The winning candidate, or None when there is nothing to choose between.
+  """
+  if not options:
+    return None
+  order = list(ranked)
+
+  def group_by(key: Callable[[str], str]) -> list[list[FieldCandidate]]:
+    groups: dict[str, list[FieldCandidate]] = {}
+    for candidate in options:
+      groups.setdefault(key(candidate.value), []).append(candidate)
+    return list(groups.values())
+
+  def group_rank(group: list[FieldCandidate]) -> tuple[int, int]:
+    sources = {c.source for c in group}
+    best = min((order.index(s) for s in sources if s in order), default=len(order))
+    return (-len(sources), best)
+
+  def distinct(group: list[FieldCandidate]) -> int:
+    return len({c.source for c in group})
+
+  winning = min(group_by(_norm), key=group_rank)
+  if distinct(winning) < 2:
+    # No two sources agree exactly — but they may agree on the song and differ
+    # only on a version qualifier, which splits them and hands the field to an
+    # unrelated third source. "Hey, Soul Sister" was published as "There for
+    # You" because iTunes said `Hey, Soul Sister (Country Mix)`, Spotify said
+    # `Hey, Soul Sister`, and MusicBrainz — describing a different recording
+    # entirely — outranked both. A `feat.` credit is never stripped: it names
+    # the same recording more completely, not a different one.
+    looser = min(group_by(lambda v: _norm(strip_version(v))), key=group_rank)
+    if distinct(looser) >= 2:
+      winning = looser
+    else:
+      # Still nothing. One source may simply spell the credit more fully:
+      # iTunes returned `Run This Town (feat. Rihanna & Kanye West)` and
+      # `JAY-Z & Kanye West` where Spotify returned `Run This Town` and
+      # `JAY-Z`. They describe the same recording; MusicBrainz, describing
+      # Bonnie Tyler, agreed with neither and won on precedence alone. A value
+      # that shares its core with nobody should not beat two that share one.
+      core = min(group_by(lambda v: _core_key(field, v)), key=group_rank)
+      if distinct(core) >= 2:
+        # within a core, the fullest credit wins, provided it is an extension
+        # of the others rather than a different string
+        return max(
+          core,
+          key=lambda c: (
+            len(c.value),
+            -(order.index(c.source) if c.source in order else len(order)),
+          ),
+        )
+  # within the winning value, still prefer the highest-ranked source, so
+  # provenance stays meaningful
+  return min(
+    winning,
+    key=lambda c: order.index(c.source) if c.source in order else len(order),
+  )
+
+
+def _core_key(field: str, value: str) -> str:
+  """Reduce a value to the part that identifies the work, not the credit.
+
+  For an artist that is the primary name alone ("JAY-Z & Kanye West" and
+  "JAY-Z" share a core); for anything else it is the value with every
+  parenthesised or bracketed suffix removed.
+
+  Args:
+    field: Field the value belongs to.
+    value: The candidate value.
+
+  Returns:
+    A normalised comparison key.
+  """
+  if field == "artist":
+    parts = split_artists(value)
+    return _norm(parts[0]) if parts else _norm(value)
+  return _norm(re.sub(r"\s*[\(\[][^)\]]*[\)\]]", "", value))
 
 
 def _is_non_label(value: str) -> bool:
@@ -385,3 +559,63 @@ def persist(
     )
     written += 1
   return written
+
+
+def rearbitrate(conn: sqlite3.Connection, track_id: int) -> int:
+  """Re-run arbitration for one track from its stored candidates.
+
+  Nothing is re-downloaded and no source is re-queried: `field_candidate` is
+  append-only and already holds every value every source offered, so a
+  resolver improvement can be applied to a whole library offline (SPEC.md §11).
+
+  Fields the user decided by hand are left alone, because `persist` refuses to
+  overwrite them.
+
+  Args:
+    conn: Open connection.
+    track_id: Track to re-decide.
+
+  Returns:
+    How many fields ended up with a different value.
+  """
+  row = conn.execute(
+    "SELECT genre_family FROM track WHERE id = ?", (track_id,)
+  ).fetchone()
+  if row is None:
+    return 0
+  candidates = [
+    FieldCandidate(
+      field=r["field"],
+      value=r["value"],
+      source=r["source"],
+      confidence=r["confidence"] or 1.0,
+    )
+    for r in conn.execute(
+      "SELECT field, value, source, confidence FROM field_candidate WHERE track_id = ?",
+      (track_id,),
+    )
+    if r["value"]
+  ]
+  if not candidates:
+    return 0
+
+  before = {
+    r["field"]: r["value"]
+    for r in conn.execute(
+      "SELECT field, value, decided_by FROM resolved_field WHERE track_id = ?",
+      (track_id,),
+    )
+    if r["decided_by"] != "manual"
+  }
+  decisions = arbitrate(candidates, family=row["genre_family"] or "other")
+  # a field that no longer resolves must not keep its stale value: dropping a
+  # compilation album means the album really is unknown now.
+  keep = {d.field for d in decisions}
+  conn.execute(
+    "DELETE FROM resolved_field WHERE track_id = ? AND decided_by != 'manual'",
+    (track_id,),
+  )
+  persist(conn, track_id, decisions)
+  after = {d.field: d.value for d in decisions if d.field in keep}
+  fields = set(before) | set(after)
+  return sum(1 for f in fields if before.get(f) != after.get(f))

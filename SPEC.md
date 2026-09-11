@@ -701,6 +701,87 @@ Version-variant guard: penalise a candidate whose title adds `(instrumental)`,
 for it. Measured need — a text match returned `SMASH! (instrumental)` at full
 confidence with matching duration (§4).
 
+### arbitration accuracy — first hundred-track run
+
+The first real run published **83 tracks, 12 of them the wrong song**, every
+one at confidence 0.95. Measured 2026-09-11; the failures were not random.
+
+**Every failure came through the AcoustID route.** `parse_response` took
+`recordings[0]` from the response, and an AcoustID entry lists many recordings
+in no meaningful order. A wrong one was then described faithfully by
+MusicBrainz — and MusicBrainz ranks first for pop, so it won `artist` and
+`title` outright:
+
+```
+Morgan Wallen - Last Night
+  itunes       Morgan Wallen - Last Night        (correct)
+  spotify      Morgan Wallen - Last Night        (correct)
+  musicbrainz  Metro Station - California        (wins on precedence)
+```
+
+**The fix is that agreement outweighs precedence for every factual field**, not
+just the album group, where the rule already existed and had been measured to
+work. Three tiers, tried in order, each only when the previous finds no two
+sources agreeing:
+
+1. exact normalised value
+2. version qualifiers stripped — `Hey, Soul Sister (Country Mix)` and
+   `Hey, Soul Sister` are the same song, and splitting them let an unrelated
+   MusicBrainz title win. A `feat.` clause is never stripped here: it names the
+   same recording more completely, not a different one
+3. core only — parenthetical suffixes gone, or for `artist` the primary name
+   alone, so `JAY-Z & Kanye West` and `JAY-Z` share a core. Within a core the
+   fullest credit wins
+
+`genre` and `artwork_url` are exempt: sources disagree on granularity by design
+there, and which granularity is wanted is what elicitation calibrates (§9).
+
+**A second bug hid behind the first.** `_best_album_source` tests each source's
+album credit against the track artist to spot compilations, but was reading an
+arbitrary artist candidate rather than the arbitrated one. Whenever a bad
+source won `artist`, every *correct* album looked like a compilation and was
+discarded — so fixing artist alone left albums wrong (`Last Night` on
+`Metro Station`, `Drive By` on `Kidz Bop 22`). The artist is now decided first
+and passed in.
+
+Result, re-arbitrated offline from stored candidates with no re-download:
+
+| | before | after |
+|---|---|---|
+| wrong artist | 12 | 0 |
+| wrong album | 12 | 0 |
+| artists rescued | — | 12 |
+| regressions | — | 0 |
+
+Remaining artist differences are all correct normalisations of a channel name
+(`jayseanworldwide` → `Jay Sean`, `push baby` → `Rixton`).
+
+**`music retag --rearbitrate` is the lever this pays for.** Arbitration re-runs
+from `field_candidate`, which is append-only and already holds every value
+every source offered, so a resolver fix reaches the whole library without
+re-downloading or re-querying anything. Manual edits survive untouched. The
+83-track library above was corrected in seconds this way.
+
+**Album editions group without brackets too.** Guetta ships `Nothing But the
+Beat`, `Nothing but the Beat 2.0` and `Nothing But the Beat Ultimate` with no
+parentheses anywhere; ungrouped they are three albums of one source each, so
+the edition a track landed on was decided by source order — one track got 2.0
+and another got Ultimate off the same record. `ultimate` joins `DELUXE_WORDS`,
+a trailing `N.N` counts as a reissue, and a trailing bare integer never does
+(`Kidz Bop 22` and `Kidz Bop 21` are different records).
+
+**A compilation is no longer used as a last resort.** `Down` was published as
+track 1 of `Ultra Dance 11` credited to DJ Enferno — the only source that
+answered was MusicBrainz, and it answered with the licensing compilation. When
+every source offers only a compilation the album fields are now dropped: an
+empty album is visibly incomplete and gets fixed in review, a wrong one
+propagates into the filename, the folder and both DJ apps.
+
+**Still open:** `parse_response` still takes `recordings[0]`. The arbitration
+fix masks it, but the underlying fingerprint match is still chosen without
+reference to the text identity, which is why `identity_confidence` reads 0.95
+on tracks that were wrong.
+
 ## 13. operational concerns
 
 **Credentials.** This repository is public. There is **no credential file**:

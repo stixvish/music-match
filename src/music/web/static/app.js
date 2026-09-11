@@ -105,21 +105,39 @@ const api = {
   },
 };
 
-const state = { list: [], counts: {}, index: 0, detail: null, field: null,
-  filter: 'review', mode: 'review', question: null };
+const state = { list: [], counts: {}, index: 0, selectedId: null, detail: null,
+  field: null, filter: 'review', mode: 'review', question: null };
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
-async function loadQueue() {
+/** Refresh the queue.
+ *
+ *  `keepDetail` is for the ingest poll. The list is ordered newest first, so
+ *  every arriving track shifts every index down by one — an index-based
+ *  selection therefore lands on a different song each second, and re-rendering
+ *  the detail pane throws away whatever was being typed into it. Selection
+ *  follows the track id, and a poll never touches the open track. */
+async function loadQueue({ keepDetail = false } = {}) {
   const all = await api.tracks();
   state.counts = all.reduce((acc, t) => (acc[t.status] = (acc[t.status] || 0) + 1, acc), {});
   state.counts.all = all.length;
   state.list = state.filter === 'all' ? all : all.filter((t) => t.status === state.filter);
+
+  const found = state.list.findIndex((t) => t.id === state.selectedId);
+  if (found >= 0) state.index = found;
+  else state.index = Math.min(state.index, Math.max(state.list.length - 1, 0));
+
   renderTabs();
   renderQueue();
-  if (state.list.length) selectIndex(Math.min(state.index, state.list.length - 1));
-  else { $('track').innerHTML = '<p class="empty">Queue is clear.</p>'; $('side').innerHTML = ''; }
+  if (!state.list.length) {
+    state.selectedId = null;
+    $('track').innerHTML = '<p class="empty">Queue is clear.</p>';
+    $('side').innerHTML = '';
+    return;
+  }
+  if (found >= 0 && keepDetail) return;
+  await selectIndex(state.index);
 }
 
 function renderTabs() {
@@ -163,6 +181,7 @@ async function selectIndex(i) {
   state.index = i;
   const row = state.list[i];
   if (!row) return;
+  state.selectedId = row.id;
   renderQueue();
   const el = document.querySelector(`.item[data-i="${i}"]`);
   el?.scrollIntoView({ block: 'nearest', behavior: reduceMotion ? 'auto' : 'smooth' });
@@ -434,8 +453,9 @@ async function watchIngest() {
   clearInterval(ingestTimer);
   const tick = async () => {
     const running = await pollIngest();
-    // the queue grows as tracks land, so refresh it alongside the progress
-    await loadQueue();
+    // the queue grows as tracks land, so refresh it alongside the progress —
+    // but never disturb the track being edited
+    await loadQueue({ keepDetail: true });
     if (!running) clearInterval(ingestTimer);
   };
   await tick();
@@ -443,6 +463,15 @@ async function watchIngest() {
 }
 
 $('console-toggle').addEventListener('click', () => setLogOpen(!logOpen));
+
+// a textarea grows with the paste; Enter submits, shift+Enter adds a line
+$('add-url').addEventListener('input', (e) => {
+  e.target.style.height = 'auto';
+  e.target.style.height = `${Math.min(e.target.scrollHeight, 120)}px`;
+});
+$('add-url').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('add').requestSubmit(); }
+});
 
 $('add').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -452,6 +481,7 @@ $('add').addEventListener('submit', async (e) => {
   try {
     await api.ingest(url);
     input.value = '';
+    input.style.height = 'auto';
     watchIngest();
   } catch (err) {
     $('add-status').innerHTML = `<p class="add-line bad">${esc(err.message)}</p>`;
@@ -585,8 +615,10 @@ for (const el of document.querySelectorAll('.mode')) {
   el.addEventListener('click', () => setMode(el.dataset.mode));
 }
 
+const TYPING = new Set(['INPUT', 'TEXTAREA']);
+
 addEventListener('keydown', (e) => {
-  if (e.target.tagName === 'INPUT' && e.key !== 'Enter') return;
+  if (TYPING.has(e.target.tagName) && e.key !== 'Enter') return;
   const audio = players[state.mode === 'elicit' ? 'elicit' : 'review'];
   if (state.mode === 'elicit') {
     if (e.key === ' ') { e.preventDefault(); audio && (audio.paused ? audio.play() : audio.pause()); }
@@ -601,7 +633,7 @@ addEventListener('keydown', (e) => {
   if (e.key === 'j' || e.key === 'ArrowDown') { e.preventDefault(); selectIndex(Math.min(state.index + 1, state.list.length - 1)); }
   else if (e.key === 'k' || e.key === 'ArrowUp') { e.preventDefault(); selectIndex(Math.max(state.index - 1, 0)); }
   else if (e.key === ' ') { e.preventDefault(); audio && (audio.paused ? audio.play() : audio.pause()); }
-  else if (e.key === 'Enter' && e.target.tagName !== 'INPUT') { e.preventDefault(); acceptCurrent(); }
+  else if (e.key === 'Enter' && !TYPING.has(e.target.tagName)) { e.preventDefault(); acceptCurrent(); }
 });
 
 loadQueue();

@@ -44,6 +44,8 @@ _TYPOGRAPHIC = str.maketrans(
     "\u2018": "'",
     "\u201c": '"',
     "\u201d": '"',
+    "\u2010": "-",  # HYPHEN: MusicBrainz writes "Anne\u2010Marie" with it
+    "\u2011": "-",  # non-breaking hyphen
     "\u2013": "-",
     "\u2014": "-",
   }
@@ -235,6 +237,30 @@ def _is_person(text: str, version_word: str) -> bool:
     re.search(r"['\u2019]s$", candidate)
   )
   return not possessive_version
+
+
+def strip_version(title: str) -> str:
+  """Remove a version designation, keeping any `feat.` credit.
+
+  The two kinds of qualifier are not alike. `(Country Mix)` names a different
+  recording; `(feat. Meghan Trainor)` names the same recording more completely.
+  Grouping titles for agreement has to ignore the first and respect the second.
+
+  Args:
+    title: Any title.
+
+  Returns:
+    The title without its version designation.
+  """
+  text = _SPACES.sub(" ", (title or "").strip())
+  match = _MIX.search(text)
+  if match:
+    text = text[: match.start()] + text[match.end() :]
+  else:
+    dashed = _MIX_DASH.search(text)
+    if dashed:
+      text = text[: dashed.start()]
+  return _SPACES.sub(" ", text).strip(" -–")
 
 
 def format_artists(artists: Sequence[str]) -> str:

@@ -7,6 +7,7 @@ terminal-only capability.
 """
 
 import logging
+import re
 import sqlite3
 import threading
 from collections import deque
@@ -373,7 +374,8 @@ def ingest(
   published (SPEC.md §12).
 
   Args:
-    url: A YouTube or YouTube Music video or playlist link.
+    url: One or more YouTube / YouTube Music video or playlist links,
+      separated by whitespace or commas. Duplicates across them are removed.
     cfg: Runtime configuration.
     limit: Stop after this many entries; 0 means all of them.
     conn: Open connection. One is opened if omitted — pass your own from a
@@ -404,9 +406,21 @@ def ingest(
     buffer.add(text, "step")
     changed()
 
-  step("enumerate", f"$ music ingest {url}")
+  # several links at once: whitespace- or comma-separated. Enumerating them
+  # together, and de-duplicating across them, means a track appearing on two
+  # playlists is downloaded once rather than downloaded and then skipped.
+  urls = [u for u in re.split(r"[\s,]+", url) if u]
+  step("enumerate", f"$ music ingest {' '.join(urls)}")
   try:
-    refs = enumerate_playlist(url, cfg.youtube, sink)
+    refs = []
+    seen: set[str] = set()
+    for one in urls:
+      for ref in enumerate_playlist(one, cfg.youtube, sink):
+        if ref.video_id not in seen:
+          seen.add(ref.video_id)
+          refs.append(ref)
+      if len(urls) > 1:
+        buffer.add(f"  {one}: {len(refs)} unique so far")
   except Exception as exc:  # noqa: BLE001 - a bad url is a message, not a crash
     state.error = str(exc)[:300]
     state.finished = True

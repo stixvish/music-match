@@ -286,12 +286,13 @@ table.cells td { padding: 0.35rem 0.5rem; border-top: 1px solid var(--line); }
 /* --- acquisition --------------------------------------------------------- */
 
 #add { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0.35rem; margin-bottom: 0.5rem; }
-#add input {
+#add textarea {
   min-width: 0; font: inherit; font-size: 0.8125rem; padding: 0.4rem 0.6rem;
   border-radius: var(--r-md); border: 1px solid var(--line);
   background: var(--surface-solid); color: var(--text);
+  resize: none; overflow-y: auto; line-height: 1.4;
 }
-#add input:focus { border-color: var(--accent); outline: none; }
+#add textarea:focus { border-color: var(--accent); outline: none; }
 #add button { font-size: 0.8125rem; padding: 0.4rem 0.7rem; }
 .add-line { display: grid; gap: 0.3rem; font-size: 0.75rem; color: var(--muted); margin: 0 0 0.6rem; }
 .add-line.done { color: var(--good); }

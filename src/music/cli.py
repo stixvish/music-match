@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from music import config, db, pipeline
+from music.arbitrate import rearbitrate
 from music.publish import retag
 
 if TYPE_CHECKING:  # the classify group is optional and heavy
@@ -38,7 +39,14 @@ def cmd_ingest(args: argparse.Namespace) -> int:
 
 
 def cmd_retag(args: argparse.Namespace) -> int:
-  """Re-emit tags from the database onto already-published files."""
+  """Re-emit tags from the database onto already-published files.
+
+  With `--rearbitrate`, arbitration is re-run from the stored candidates
+  first. This is the lever the database-as-source-of-truth design exists for
+  (SPEC.md §11): a resolver improvement is applied to the whole library
+  without re-downloading or re-querying anything. Manual edits are preserved,
+  because `persist` never overwrites them.
+  """
   cfg = config.load()
   conn = _open(cfg)
   if args.id:
@@ -53,6 +61,10 @@ def cmd_retag(args: argparse.Namespace) -> int:
   if not ids:
     log.info("nothing published yet")
     return 0
+
+  if args.rearbitrate:
+    changed = sum(rearbitrate(conn, track_id) for track_id in ids)
+    log.info("re-arbitrated %d track(s), %d field(s) changed", len(ids), changed)
 
   done = missing = 0
   for track_id in ids:
@@ -266,6 +278,11 @@ def build_parser() -> argparse.ArgumentParser:
   status.set_defaults(func=cmd_status)
 
   retag_cmd = sub.add_parser("retag", help="re-emit tags from the database")
+  retag_cmd.add_argument(
+    "--rearbitrate",
+    action="store_true",
+    help="re-run arbitration from stored candidates before re-tagging",
+  )
   retag_cmd.add_argument("--id", type=int, default=None, help="a single track id")
   retag_cmd.set_defaults(func=cmd_retag)
 

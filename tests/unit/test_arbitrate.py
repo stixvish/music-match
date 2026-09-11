@@ -249,7 +249,16 @@ def test_a_compilation_does_not_supply_album_fields():
   assert got["track_number"] == ("3", "spotify")
 
 
-def test_a_compilation_is_used_when_nothing_else_offers_an_album():
+def test_a_compilation_only_album_is_dropped_rather_than_used():
+  """Reversed deliberately: this test used to assert the opposite.
+
+  Taking the compilation when it was the only offer looked like graceful
+  degradation. On the first hundred-track run it published "Down" by Jay Sean
+  as track 1 of "Ultra Dance 11" credited to DJ Enferno — the only source that
+  answered was MusicBrainz, and it answered with the licensing compilation.
+  A wrong album propagates into the filename, the folder and both DJ apps;
+  an empty one is visibly incomplete and gets fixed in review.
+  """
   got = resolved(
     arbitrate(
       [
@@ -259,7 +268,8 @@ def test_a_compilation_is_used_when_nothing_else_offers_an_album():
       family="pop",
     )
   )
-  assert got["album"] == ("NRJ Hits 2011", "musicbrainz")
+  assert "album" not in got
+  assert "album_artist" not in got
 
 
 @pytest.mark.parametrize("credit", ["Various Artists", "various", "VA", "Diverse"])
@@ -428,3 +438,182 @@ def test_different_albums_do_not_group():
   from music.arbitrate import _album_key
 
   assert _album_key("Planet Pit") != _album_key("Global Warming")
+
+
+# --- consensus: agreement outweighs precedence (first 100-track run) --------
+
+
+def test_two_agreeing_sources_beat_one_ranked_higher_on_artist():
+  """The defect that published Morgan Wallen's "Last Night" as Metro Station.
+
+  AcoustID matched the wrong recording, MusicBrainz faithfully described it,
+  and MusicBrainz ranks first for pop — so it won `artist` and `title` over
+  iTunes and Spotify, which both had it right. Twelve of eighty-three published
+  tracks failed exactly this way.
+  """
+  got = resolved(
+    arbitrate(
+      [
+        cand("artist", "Metro Station", "musicbrainz"),
+        cand("artist", "Morgan Wallen", "itunes"),
+        cand("artist", "Morgan Wallen", "spotify"),
+        cand("title", "California", "musicbrainz"),
+        cand("title", "Last Night", "itunes"),
+        cand("title", "Last Night", "spotify"),
+      ],
+      family="pop",
+    )
+  )
+  assert got["artist"][0] == "Morgan Wallen"
+  assert got["title"][0] == "Last Night"
+
+
+def test_a_lone_source_still_wins_when_it_is_the_only_one():
+  got = resolved(arbitrate([cand("title", "Only Offer", "discogs")], family="pop"))
+  assert got["title"][0] == "Only Offer"
+
+
+def test_precedence_still_decides_when_no_two_sources_agree():
+  got = resolved(
+    arbitrate(
+      [
+        cand("title", "A", "musicbrainz"),
+        cand("title", "B", "itunes"),
+        cand("title", "C", "spotify"),
+      ],
+      family="pop",
+    )
+  )
+  assert got["title"] == ("A", "musicbrainz")
+
+
+def test_consensus_ignores_case_and_spacing():
+  got = resolved(
+    arbitrate(
+      [
+        cand("title", "Something Else", "musicbrainz"),
+        cand("title", "last  night", "itunes"),
+        cand("title", "Last Night", "spotify"),
+      ],
+      family="pop",
+    )
+  )
+  # the two spellings are one value, and outvote the higher-ranked source
+  assert got["title"][0].casefold().replace(" ", "") == "lastnight"
+
+
+def test_genre_is_exempt_from_consensus():
+  """Two coarse sources agreeing must not outrank a specific one.
+
+  Granularity differs by design, and which granularity is wanted is exactly
+  what elicitation calibrates (SPEC.md §9) — so genre stays on precedence.
+  """
+  got = resolved(
+    arbitrate(
+      [
+        cand("genre", "Progressive House", "discogs"),
+        cand("genre", "Dance", "itunes"),
+        cand("genre", "Dance", "spotify"),
+      ],
+      family="electronic",
+    )
+  )
+  assert got["genre"] == ("Progressive House", "discogs")
+
+
+# --- album editions --------------------------------------------------------
+
+
+def test_unbracketed_editions_group_as_one_album():
+  """Guetta ships plain, "2.0" and "Ultimate" with no brackets anywhere.
+
+  Ungrouped they are three albums with one source each, so the edition a track
+  lands on is decided by whichever source ranks first — which is how one track
+  got 2.0 and another got Ultimate off the same record.
+  """
+  got = resolved(
+    arbitrate(
+      [
+        cand("album", "Nothing But the Beat", "itunes"),
+        cand("album", "Nothing but the Beat 2.0", "spotify"),
+        cand("album", "Nothing But the Beat Ultimate", "musicbrainz"),
+      ],
+      family="pop",
+    )
+  )
+  assert got["album"][0] == "Nothing But the Beat Ultimate"
+
+
+def test_a_numbered_reissue_beats_the_plain_album():
+  got = resolved(
+    arbitrate(
+      [
+        cand("album", "Nothing But the Beat", "itunes"),
+        cand("album", "Nothing but the Beat 2.0", "spotify"),
+      ],
+      family="pop",
+    )
+  )
+  assert got["album"][0] == "Nothing but the Beat 2.0"
+
+
+def test_numbered_albums_are_not_mistaken_for_editions():
+  """Kidz Bop 22 and Kidz Bop 21 are different records, not editions."""
+  from music.arbitrate import _album_key
+
+  assert _album_key("Kidz Bop 22") != _album_key("Kidz Bop 21")
+  assert _album_key("Nothing But the Beat") == _album_key("Nothing but the Beat 2.0")
+
+
+def test_a_version_qualifier_does_not_split_two_agreeing_sources():
+  """Hey, Soul Sister was published as There for You.
+
+  iTunes returned `Hey, Soul Sister (Country Mix)` and Spotify returned
+  `Hey, Soul Sister`. Exact grouping made those two separate answers of one
+  source each, so MusicBrainz — describing a completely different recording —
+  won on precedence.
+  """
+  got = resolved(
+    arbitrate(
+      [
+        cand("title", "There for You", "musicbrainz"),
+        cand("title", "Hey, Soul Sister (Country Mix)", "itunes"),
+        cand("title", "Hey, Soul Sister", "spotify"),
+      ],
+      family="pop",
+    )
+  )
+  assert got["title"][0] == "Hey, Soul Sister"
+
+
+def test_a_feat_credit_is_never_stripped_when_grouping():
+  """A `feat.` clause names the same recording more fully, not a different one."""
+  got = resolved(
+    arbitrate(
+      [
+        cand("title", "Marvin Gaye (feat. Meghan Trainor)", "itunes"),
+        cand("title", "Marvin Gaye (feat. Meghan Trainor)", "spotify"),
+        cand("title", "Marvin Gaye", "musicbrainz"),
+      ],
+      family="pop",
+    )
+  )
+  assert got["title"][0] == "Marvin Gaye (feat. Meghan Trainor)"
+
+
+def test_the_loose_pass_only_runs_when_nothing_agrees_exactly():
+  """Exact agreement must never be overridden by a looser match."""
+  got = resolved(
+    arbitrate(
+      [
+        cand("title", "Delilah [Tom Santa Remix]", "itunes"),
+        cand("title", "Delilah [Tom Santa Remix]", "spotify"),
+        cand("title", "Delilah", "musicbrainz"),
+        cand("title", "Delilah", "discogs"),
+      ],
+      family="electronic",
+    )
+  )
+  # musicbrainz+discogs also agree, two each — precedence breaks the tie, and
+  # the remix is not silently flattened into the original
+  assert got["title"][0] in ("Delilah", "Delilah [Tom Santa Remix]")

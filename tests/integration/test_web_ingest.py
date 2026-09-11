@@ -142,3 +142,37 @@ def test_stage_counters_reach_the_ui(client, fake_ingest):
   for key in ("downloaded", "analysed", "resolved", "published", "queued"):
     assert key in status, key
   assert status["downloaded"] == 2
+
+
+def test_several_links_are_enumerated_together(monkeypatch, client):
+  """One box, many playlists — and a track on two of them downloads once."""
+  from music import config, pipeline
+  from music.acquire import VideoRef
+
+  seen: list[str] = []
+
+  def fake_enumerate(url, cfg, sink=None):
+    seen.append(url)
+    return {
+      "https://youtu.be/list-a": [
+        VideoRef(video_id="x", title="Shared", channel="c", duration_s=1),
+        VideoRef(video_id="y", title="Only A", channel="c", duration_s=1),
+      ],
+      "https://youtu.be/list-b": [
+        VideoRef(video_id="x", title="Shared", channel="c", duration_s=1),
+        VideoRef(video_id="z", title="Only B", channel="c", duration_s=1),
+      ],
+    }[url]
+
+  monkeypatch.setattr(pipeline, "enumerate_playlist", fake_enumerate)
+  monkeypatch.setattr(pipeline, "already_have", lambda conn, vid: True)
+
+  state = pipeline.ingest(
+    "https://youtu.be/list-a\nhttps://youtu.be/list-b",
+    config.load(),
+    conn=object(),
+    resolver=object(),
+  )
+  assert seen == ["https://youtu.be/list-a", "https://youtu.be/list-b"]
+  assert state.total == 3, "the shared video must be counted once"
+  assert state.skipped == 3
