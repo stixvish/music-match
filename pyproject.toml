@@ -54,7 +54,9 @@ warn_return_any = true
 
 # third-party packages without type stubs
 [[tool.mypy.overrides]]
-module = ["yt_dlp.*", "mutagen.*", "essentia.*"]
+# numpy arrives via the optional `classify` group, which ci does not sync;
+# essentia and yt-dlp ship no stubs.
+module = ["yt_dlp.*", "mutagen.*", "essentia.*", "numpy.*"]
 ignore_missing_imports = true
 
 # pure modules are held to a stricter bar; see SPEC.md §19
