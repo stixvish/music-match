@@ -14,6 +14,7 @@ from collections.abc import Sequence
 
 from pydantic import ValidationError
 
+from music.identify import Evidence, Match, variant_mismatch
 from music.sources import cache
 from music.sources.base import FieldCandidate, Identity, ReleaseInfo
 from music.sources.ratelimit import RateLimiter, with_backoff
@@ -171,6 +172,41 @@ class MusicBrainz:
       if fallback is None:
         fallback = (full, releases)
     return fallback if fallback else (None, [])
+
+  def evaluate(self, identity: Identity) -> tuple[Match, Sequence[FieldCandidate]]:
+    """Resolve a track and report how confident the identity is.
+
+    Args:
+      identity: Normalised artist and title, ideally with duration.
+
+    Returns:
+      The evidence, and the candidates it produced.
+    """
+    try:
+      recordings = self.search_recordings(identity)
+    except Exception as exc:  # noqa: BLE001 - a dead source must not stop a run
+      log.warning("musicbrainz lookup failed: %s", exc)
+      return Match(Evidence.NONE), []
+    if not recordings:
+      return Match(Evidence.NONE), []
+
+    ranked = rank_recordings(recordings, identity.duration_s)
+    top = ranked[0]
+    scores = sorted((int(r.get("score") or 0) for r in recordings), reverse=True)
+    gap = (scores[0] - scores[1]) if len(scores) > 1 else 99
+
+    delta = None
+    if identity.duration_s and top.get("length"):
+      delta = float(top["length"]) / 1000 - identity.duration_s
+
+    match = Match(
+      evidence=Evidence.ISRC if identity.isrc else Evidence.TEXT,
+      search_score=int(top.get("score") or 0),
+      duration_delta_s=delta,
+      rival_gap=gap,
+      variant_mismatch=variant_mismatch(identity.title, str(top.get("title") or "")),
+    )
+    return match, self.lookup(identity)
 
   def lookup(self, identity: Identity) -> Sequence[FieldCandidate]:
     """Return candidates for a track.
