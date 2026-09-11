@@ -142,9 +142,13 @@ table, but genre is itself one of the contested fields.
 
 **The classifier is a router, not a genre source.** Its `Style` output (the
 half after `---`) is not trustworthy — it splits near-identical tracks across
-`Trap` / `Cloud Rap` / `Pop Rap` with low, uncalibrated confidence. Only the
-**top-level genre** is used, and only to pick the precedence table. The genre
-*tag* always comes from a real source.
+`Trap` / `Cloud Rap` / `Pop Rap` on uncalibrated activations. **`Style` is never
+written as a tag.**
+
+Its **top-level genre** is used for two things: routing precedence, and — only
+when no real source supplied a genre at all — as a last-resort tag value. A
+coarse-but-plausible `Hip Hop` beats the blank field or the literal `"Music"`
+that a fresh download provides. It never outranks a real source.
 
 **Six genre families**, taken from the Discogs top-level genre (the part before
 `---`) and collapsed:
@@ -160,7 +164,7 @@ half after `---`) is not trustworthy — it splits near-identical tracks across
 |---|---|
 | artist / title / mix name | Beatport (electronic) → Discogs → MusicBrainz → Spotify |
 | featured vs. collaborating artists | **MusicBrainz** (models artist-credit; Spotify flattens) |
-| genre / style | Discogs Style → Beatport → MusicBrainz. **Essentia is not a genre source** — see below |
+| genre / style | Discogs Style → Beatport → MusicBrainz → *(last resort)* Essentia top-level |
 | label / catalog no. | Discogs → Beatport |
 | release date | MusicBrainz release-group (original, not reissue) → Spotify |
 | artwork | iTunes Search API |
