@@ -6,10 +6,14 @@ about the product go in the spec, decisions about process go here.
 
 ## style
 
-- **lowercase.** filenames, headings, prose, identifiers. `spec.md`, not
-  `SPEC.md`. the one exception is this file: claude code only reads
-  `CLAUDE.md` in caps, so the name stays uppercase while the content does not.
-- python: `snake_case`, no single-letter names outside comprehensions.
+- **lowercase prose.** document headings are lowercase, and sentences need not
+  start with a capital. this is a writing style, not a filesystem rule.
+- **filenames follow convention, not the prose style.** root-level project docs
+  are uppercase by convention (`SPEC.md`, `README.md`, `CLAUDE.md`); everything
+  else follows its ecosystem (`pyproject.toml`, `tasks/todo.md`).
+- **code follows its language's convention.** python is `snake_case` for
+  functions and variables, `PascalCase` for classes — google style, 2-space
+  indent (`SPEC.md` §20). never impose the prose style on identifiers.
 - comments explain *why*, never *what*.
 
 ## commits
@@ -18,7 +22,8 @@ about the product go in the spec, decisions about process go here.
   imperative, **under 70 characters**.
 - **no body.** if the why matters, it belongs in `spec.md`, not a commit
   message. the spec is the record; commits are pointers.
-- types: `feat` `fix` `docs` `refactor` `test` `chore`.
+- types: `feat` `fix` `docs` `style` `refactor` `perf` `test` `build` `ci`
+  `chore` `revert`.
 - **never add claude as a co-author.** no `Co-Authored-By`, no
   `Generated with` trailers. these are the user's commits.
 - small commits for small tasks. do not batch unrelated work.
@@ -51,6 +56,7 @@ docs(spec): record opus vs aac spectral measurement
 ## repo layout
 
 ```
-spec.md    what we are building, and the evidence for it
-claude.md  this file — how we work
+SPEC.md    what we are building, and the evidence for it
+CLAUDE.md  this file — how we work
+tasks/     plan.md (phases) and todo.md (tasks)
 ```
