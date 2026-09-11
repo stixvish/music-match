@@ -222,6 +222,25 @@ are answers to different questions and must be sourced separately.
 Guard against bad catalogue data: ignore dates before 1900 or in the future, and
 prefer a date with full day precision over a bare year when both exist.
 
+### artist query strategy
+
+**Query the primary artist, not the full credit.** Measured on 40 multi-artist
+tracks: primary found the recording and full credit found nothing **29 times**;
+full credit never won outright and never scored higher.
+
+The reason is separator convention. Tags carry Apple/YouTube's form —
+`Alesso; Tove Lo`, `Drake; Yebba` — and MusicBrainz does not index that string
+at all, so `artist:"Alesso; Tove Lo"` returns nothing while `artist:"Alesso"`
+returns 100.
+
+`&` is the exception, because MusicBrainz uses it too. On 50 `&`-joined tracks:
+6 ties, 3 primary-only, 1 full-only. So the full credit is retained and retried
+**only when the primary-artist query returns nothing** — cheap, occasionally
+useful, never the first choice.
+
+Collaborators are then recovered from the catalogue rather than the filename,
+which is also where the featured-vs-collaborating distinction comes from.
+
 **Rate limiting and caching** (§13) are part of this layer, not an afterthought:
 every source adapter backs off exponentially and every response is cached to
 disk, because resolution will be re-run many times as precedence is tuned.
