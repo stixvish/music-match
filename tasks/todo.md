@@ -29,10 +29,10 @@
   - accept: seeded with real failures — `LMFAOVEVO`,
     `Calvin Harris - I Need Your Love (Official Video)`, `Burnie, Phoenix Ho`
   - verify: golden table passes; 90% coverage (§19); pure, no i/o
-- [ ] **t9** musicbrainz adapter behind the §7 protocol, pydantic models
+- [x] **t9** musicbrainz adapter behind the §7 protocol, pydantic models
   - accept: returns `FieldCandidate`s; malformed json raises at the boundary
   - verify: cassette test, no network
-- [ ] **t10** cache + rate limit + backoff
+- [x] **t10** cache + rate limit + backoff
   - accept: second identical lookup makes zero http calls
   - verify: unit test counts calls; backoff test simulates 503
 - [ ] **t11** confidence scoring (§12), pure
