@@ -104,26 +104,62 @@ def create_app(database: Path | None = None) -> FastAPI:
     )
 
   @app.get("/api/tracks")
-  def tracks(status: str | None = None) -> list[dict]:
-    """List tracks, newest first, optionally filtered by status."""
+  def tracks(status: str | None = None, q: str | None = None) -> list[dict]:
+    """List tracks, newest first, optionally filtered by status and a query.
+
+    The search covers the *resolved* artist, title, album and label and also
+    the normalised name the track was searched under. Both matter: finding a
+    track by what it became is library browsing, and finding it by what YouTube
+    called it is how a bad match gets chased down.
+
+    Filtering happens outside the inner select because the resolved fields are
+    correlated subqueries — SQLite cannot reference their aliases in the same
+    WHERE clause.
+    """
     conn = connect()
-    where = "WHERE t.status = ?" if status else ""
-    args = (status,) if status else ()
-    return _rows(
-      conn,
+    inner = (
       "SELECT t.id, t.status, t.stage, t.genre_family, t.identity_confidence,"
       " t.is_video_rip, t.published_path, q.reason,"
       " (SELECT value FROM resolved_field"
       "  WHERE track_id=t.id AND field='artist') artist,"
       " (SELECT value FROM resolved_field"
       "  WHERE track_id=t.id AND field='title') title,"
+      " (SELECT value FROM resolved_field"
+      "  WHERE track_id=t.id AND field='album') album,"
+      " (SELECT value FROM resolved_field"
+      "  WHERE track_id=t.id AND field='label') label,"
       " t.norm_artist, t.norm_title, s.channel, s.duration_s"
       " FROM track t"
       " JOIN source_file s ON s.id = t.source_file_id"
       " LEFT JOIN review_queue q ON q.track_id = t.id"
-      f" {where} ORDER BY t.id DESC",
-      *args,
     )
+    clauses: list[str] = []
+    args: list[object] = []
+    if status:
+      clauses.append("status = ?")
+      args.append(status)
+    term = (q or "").strip().casefold()
+    if term:
+      fields = (
+        "artist",
+        "title",
+        "album",
+        "label",
+        "norm_artist",
+        "norm_title",
+        "channel",
+      )
+      clauses.append(
+        "("
+        + " OR ".join(f"lower(COALESCE({f}, '')) LIKE ? ESCAPE '\\'" for f in fields)
+        + ")"
+      )
+      # `%` and `_` are LIKE metacharacters: a user typing `%` means a literal
+      # percent sign, not "match everything".
+      escaped = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+      args.extend([f"%{escaped}%"] * len(fields))
+    where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+    return _rows(conn, f"SELECT * FROM ({inner}){where} ORDER BY id DESC", *args)
 
   @app.get("/api/track/{track_id}")
   def track(track_id: int) -> dict:

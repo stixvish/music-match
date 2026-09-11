@@ -5,9 +5,10 @@ Each step is tried only when the one above it produces nothing usable.
 """
 
 import logging
+import re
 import sqlite3
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from music.identify import (
@@ -15,9 +16,12 @@ from music.identify import (
   Evidence,
   Match,
   artist_is_unrelated,
+  is_plausible,
   match_score,
+  should_auto_accept,
   variant_mismatch,
 )
+from music.publish.naming import strip_version
 from music.sources.acoustid import AcoustId
 from music.sources.base import FieldCandidate, Identity
 from music.sources.musicbrainz import (
@@ -94,7 +98,13 @@ class Resolver:
     # a track we cannot identify produces five confident answers about the
     # wrong song.
     if resolved.match.evidence is not Evidence.NONE:
-      resolved.candidates.extend(self._enrich(identity))
+      enrichment = self._enrich(identity)
+      resolved.candidates.extend(enrichment)
+      # A doubtful identity can still be settled by the catalogues that were
+      # queried independently. This runs *after* enrichment for the reason
+      # above, and only ever raises confidence.
+      if not should_auto_accept(resolved.match) and corroborates(identity, enrichment):
+        resolved.match = replace(resolved.match, corroborated=True)
     return resolved
 
   def _enrich(self, identity: Identity) -> list[FieldCandidate]:
@@ -209,3 +219,59 @@ def candidate_map(candidates: Sequence[FieldCandidate]) -> dict[str, str]:
   for candidate in candidates:
     out.setdefault(candidate.field, candidate.value)
   return out
+
+
+def corroborates(
+  identity: Identity,
+  candidates: Sequence[FieldCandidate],
+  *,
+  min_sources: int = 2,
+) -> bool:
+  """Whether independent catalogues agree on this track's identity.
+
+  Two conditions, both required. The sources must agree **with each other**,
+  and that agreement must also match **what we searched for** — without the
+  second, two catalogues confidently describing the same wrong song would
+  confirm each other.
+
+  Version qualifiers are ignored when comparing sources to each other, since
+  one catalogue listing `(feat. X)` and another not is not a disagreement about
+  which song this is. Whether the *cut* is right is a separate question, and
+  `variant_mismatch` keeps its veto over this (SPEC.md §12).
+
+  Args:
+    identity: What we searched for.
+    candidates: Candidates from the enrichment sources only.
+    min_sources: How many distinct sources must agree.
+
+  Returns:
+    True when the identity is corroborated.
+  """
+  by_source: dict[str, dict[str, str]] = {}
+  for candidate in candidates:
+    if candidate.field in ("artist", "title") and candidate.value:
+      by_source.setdefault(candidate.source, {})[candidate.field] = candidate.value
+
+  groups: dict[tuple[str, str], list[str]] = {}
+  for source, values in by_source.items():
+    if "artist" not in values or "title" not in values:
+      continue
+    key = (
+      _fold(values["artist"]),
+      _fold(strip_version(values["title"])),
+    )
+    groups.setdefault(key, []).append(source)
+
+  for sources in groups.values():
+    if len(sources) < min_sources:
+      continue
+    agreed = by_source[sources[0]]
+    if is_plausible(
+      identity.artist, identity.title, agreed["artist"], agreed["title"]
+    ) and not artist_is_unrelated(identity.artist, agreed["artist"]):
+      return True
+  return False
+
+
+def _fold(text: str) -> str:
+  return re.sub(r"[^a-z0-9]", "", (text or "").casefold())

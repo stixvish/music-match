@@ -241,3 +241,42 @@ def test_artwork_is_served_once_published(client):
   assert r.status_code == 200
   assert r.headers["content-type"] == "image/jpeg"
   assert r.content == tags.artwork
+
+
+# --- search ----------------------------------------------------------------
+
+
+def test_search_matches_the_resolved_title(client):
+  assert len(client.get("/api/tracks?q=song").json()) == 1
+  assert client.get("/api/tracks?q=nothinglikethis").json() == []
+
+
+def test_search_matches_the_resolved_artist(client):
+  assert len(client.get("/api/tracks?q=an artist").json()) == 1
+
+
+def test_search_matches_the_name_the_track_was_searched_under(client, tmp_path):
+  """Finding a bad match means searching for what YouTube called it."""
+  conn = db.connect(tmp_path / "w.db")
+  conn.execute("UPDATE track SET norm_title = 'Totally Different Upload'")
+  conn.commit()
+  conn.close()
+  assert len(client.get("/api/tracks?q=totally different").json()) == 1
+
+
+def test_search_is_case_insensitive(client):
+  assert len(client.get("/api/tracks?q=A SONG").json()) == 1
+
+
+def test_search_combines_with_the_status_filter(client):
+  assert len(client.get("/api/tracks?q=song&status=review").json()) == 1
+  assert client.get("/api/tracks?q=song&status=published").json() == []
+
+
+def test_an_empty_query_returns_everything(client):
+  assert len(client.get("/api/tracks?q=").json()) == 1
+
+
+def test_a_wildcard_in_the_query_is_not_a_wildcard(client):
+  """`%` is a LIKE metacharacter; a user typing it means a literal percent."""
+  assert client.get("/api/tracks?q=%").json() == []

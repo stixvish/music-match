@@ -13,6 +13,11 @@ from enum import StrEnum
 # below this, nothing is written and the track goes to the review queue.
 AUTO_ACCEPT = 0.80
 
+# Confidence for an identity that independent catalogues corroborate. Below
+# ISRC (0.98) and a clean fingerprint (0.95), because agreement between two
+# text searches is weaker evidence than either — but well clear of review.
+CORROBORATED = 0.90
+
 # a matched title that adds one of these when the query did not ask for it is
 # very likely the wrong version. measured need: a text search returned
 # "SMASH! (instrumental)" at full confidence with a matching duration.
@@ -90,6 +95,7 @@ class Match:
   acoustid_score: float | None = None
   variant_mismatch: bool = False
   artist_unrelated: bool = False
+  corroborated: bool = False
 
   @property
   def duration_ok(self) -> bool:
@@ -252,19 +258,28 @@ def confidence(match: Match) -> float:
   elif match.evidence is Evidence.ACOUSTID:
     strong = (match.acoustid_score or 0.0) >= 0.90 and match.duration_ok
     base = 0.95 if strong else 0.50
-    # a fingerprint match credited to a stranger is a cover, and covers are
-    # the one wrong answer that title scoring cannot see (SPEC.md §12)
-    if match.artist_unrelated:
-      base = min(base, 0.50)
   else:
     score = match.search_score or 0
     # a close rival means the search could not tell two recordings apart
     contested = match.rival_gap is not None and match.rival_gap < 2
     base = 0.85 if (score >= 90 and match.duration_ok and not contested) else 0.50
 
-  # an unrequested version qualifier drops the match below auto-accept, because
-  # being confidently wrong about the version is worse than asking.
-  if match.variant_mismatch:
+  # Independent catalogues agreeing on artist and title settles *which song
+  # this is*, which is the only question the review queue exists to answer
+  # (SPEC.md §9). A dubious fingerprint is not an unknown identity when two
+  # other sources name the same recording — that is how `Call Me Maybe` and
+  # `FourFiveSeconds` ended up in review despite being unambiguous.
+  # Corroboration answers "which song is this", so it cannot lift a doubt
+  # about *this file's audio*. A fingerprint is acoustic evidence; catalogue
+  # agreement is bibliographic. Two catalogues confirming that Taylor Swift
+  # recorded the song does not make this file her recording of it — and
+  # without this guard, the three covers found above were lifted straight back
+  # to auto-accept and would have been tagged as the originals.
+  if match.corroborated and not (match.variant_mismatch or match.artist_unrelated):
+    base = max(base, CORROBORATED)
+
+  # applied last, so nothing can raise a match back over them
+  if match.variant_mismatch or match.artist_unrelated:
     base = min(base, 0.50)
   return round(base, 2)
 

@@ -62,9 +62,12 @@ function mountPlayer(key, slotId, src) {
 
 
 const api = {
-  async tracks(status) {
-    const q = status ? `?status=${encodeURIComponent(status)}` : '';
-    return (await fetch(`/api/tracks${q}`)).json();
+  async tracks(status, query) {
+    const p = new URLSearchParams();
+    if (status) p.set('status', status);
+    if (query) p.set('q', query);
+    const qs = p.toString();
+    return (await fetch(`/api/tracks${qs ? `?${qs}` : ''}`)).json();
   },
   async track(id) { return (await fetch(`/api/track/${id}`)).json(); },
   async setField(id, field, value) {
@@ -106,7 +109,7 @@ const api = {
 };
 
 const state = { list: [], counts: {}, index: 0, selectedId: null, detail: null,
-  field: null, filter: 'review', mode: 'review', question: null };
+  field: null, filter: 'review', mode: 'review', question: null, query: '' };
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -119,10 +122,17 @@ const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) =>
  *  the detail pane throws away whatever was being typed into it. Selection
  *  follows the track id, and a poll never touches the open track. */
 async function loadQueue({ keepDetail = false } = {}) {
-  const all = await api.tracks();
+  // counts come from the unfiltered set, so the tabs keep saying how much
+  // exists rather than how much the current search happens to show
+  const [all, matching] = await Promise.all([
+    api.tracks(),
+    state.query ? api.tracks(null, state.query) : null,
+  ]);
+  const visible = matching ?? all;
   state.counts = all.reduce((acc, t) => (acc[t.status] = (acc[t.status] || 0) + 1, acc), {});
   state.counts.all = all.length;
-  state.list = state.filter === 'all' ? all : all.filter((t) => t.status === state.filter);
+  state.list = state.filter === 'all'
+    ? visible : visible.filter((t) => t.status === state.filter);
 
   const found = state.list.findIndex((t) => t.id === state.selectedId);
   if (found >= 0) state.index = found;
@@ -169,7 +179,8 @@ function renderQueue() {
       <div class="s">${esc(t.artist || t.norm_artist || t.channel || '')}</div>
       <div style="margin-top:.25rem">${pills}</div>
     </div>`;
-  }).join('') || '<p class="empty">Nothing to review.</p>';
+  }).join('') || `<p class="empty">${state.query
+    ? `Nothing matches "${esc(state.query)}".` : 'Nothing to review.'}</p>`;
 
   for (const el of document.querySelectorAll('.item')) {
     // commit on click, but the :active transform already fired on pointer-down
@@ -461,6 +472,22 @@ async function watchIngest() {
   await tick();
   ingestTimer = setInterval(tick, 1000);
 }
+
+// debounced: a keystroke per request would hammer sqlite on a 2,000-row library
+let searchTimer = 0;
+$('search').addEventListener('input', (e) => {
+  clearTimeout(searchTimer);
+  const value = e.target.value.trim();
+  searchTimer = setTimeout(() => {
+    state.query = value;
+    state.index = 0;
+    loadQueue();
+  }, 180);
+});
+$('search').addEventListener('keydown', (e) => {
+  // escape clears and hands the keyboard back to the queue
+  if (e.key === 'Escape') { e.target.value = ''; state.query = ''; e.target.blur(); loadQueue(); }
+});
 
 $('console-toggle').addEventListener('click', () => setLogOpen(!logOpen));
 

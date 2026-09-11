@@ -349,3 +349,13 @@ table.cells td { padding: 0.35rem 0.5rem; border-top: 1px solid var(--line); }
   float: right; font-size: 0.6875rem; padding: 0.15rem 0.5rem;
   border-radius: 999px; color: var(--muted);
 }
+
+/* --- search -------------------------------------------------------------- */
+
+#search {
+  width: 100%; font: inherit; font-size: 0.8125rem; margin-bottom: 0.5rem;
+  padding: 0.4rem 0.6rem; border-radius: var(--r-md);
+  border: 1px solid var(--line); background: var(--surface-solid); color: var(--text);
+}
+#search:focus { border-color: var(--accent); outline: none; }
+#search::-webkit-search-cancel-button { cursor: pointer; }

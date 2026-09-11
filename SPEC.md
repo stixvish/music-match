@@ -798,16 +798,36 @@ hours at the assumed 35 s each. The previous 95% was not real — one track in
 six of those was wrong — so the honest position is that the budget was never
 being met, only unmeasured.
 
-**The cheapest way back** is that a suspect fingerprint is not the same as an
-unknown identity. Of the 26 review items, several are tracks where the
-fingerprint is dubious *and iTunes and Spotify independently agree on artist
-and title* — `Call Me Maybe` and `FourFiveSeconds` are both in that group.
-Cross-source agreement is exactly the evidence `_consensus` already computes,
-and treating it as identity confirmation would return those to auto-accept
-without weakening anything. It needs the enrichment candidates to be available
-when confidence is computed, which today they are not: enrichment runs after
-identity is settled, deliberately (§12), so this is a real change rather than a
-tweak. **Not yet built.**
+**Corroboration restores it.** A suspect fingerprint is not the same as an
+unknown identity: when two enrichment sources independently agree on artist and
+title *and* that agreement matches the query, the identity is settled and
+confidence is raised to `CORROBORATED` (0.90). Both conditions are required —
+without the second, two catalogues confidently describing the same wrong song
+would confirm each other.
+
+**Corroboration cannot lift a doubt about the audio.** A fingerprint is
+*acoustic* evidence about this file; catalogue agreement is *bibliographic*
+evidence about the song. Two catalogues confirming that Taylor Swift recorded
+the track does not make this file her recording of it. So `variant_mismatch`
+and `artist_unrelated` both veto corroboration, and are applied last.
+
+This distinction was found by measurement, not reasoning. The first version let
+corroboration lift everything, which took auto-accept to 90.6% — and silently
+returned three covers to auto-accept, where they would have been published
+under the original artist's name.
+
+Final, over the same 106 tracks:
+
+| | first run | now |
+|---|---|---|
+| published as the wrong song | 14 | 0 |
+| covers reaching the library | 6 | 0 |
+| auto-accept | 95% (false) | **86.8%** |
+| review queue | 20 | 14 |
+
+The 14 are all real: six covers, four duration mismatches, three version
+mismatches, and `push baby`/Rixton — the one known false positive, a renamed
+band. §9's budget needs ≥84%, so 86.8% holds.
 
 ### result selection — one scorer, three call sites
 

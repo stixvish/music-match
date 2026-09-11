@@ -108,6 +108,10 @@
 - [x] **t36** result selection: one scorer for every source; itunes/spotify
   rank the five they fetch; acoustid scores each linked recording and
   rejects the match when none resembles the query (§12)
+- [x] **t37** corroboration: two agreeing catalogues settle a doubtful
+  identity, but never one about the audio. 86.8% auto-accept, 0 covers (§12)
+- [x] **t38** search the library by artist, title, album, label or the name
+  the track was searched under
 - [ ] **cp7** review 50 real items, measure seconds/item vs §9's assumed 35 s
 
 ## phase 7 — the real run
