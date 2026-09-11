@@ -272,14 +272,55 @@ def cmd_retag(args: argparse.Namespace) -> int:
   return 0
 
 
+def _free_port(preferred: int, host: str = "127.0.0.1", tries: int = 20) -> int | None:
+  """Find a bindable port, starting at `preferred`.
+
+  Args:
+    preferred: The port to try first.
+    host: Interface to bind.
+    tries: How many consecutive ports to try.
+
+  Returns:
+    A free port, or None if none of them are free.
+  """
+  import socket
+
+  for port in range(preferred, preferred + tries):
+    with socket.socket() as probe:
+      probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+      try:
+        probe.bind((host, port))
+      except OSError:
+        continue
+      return port
+  return None
+
+
 def cmd_serve(args: argparse.Namespace) -> int:
   """Run the local review and editing UI (SPEC.md §15)."""
   import uvicorn
 
   from music.web import create_app
 
-  log.info("review ui: http://127.0.0.1:%d", args.port)
-  uvicorn.run(create_app(), host="127.0.0.1", port=args.port, log_level="warning")
+  port = args.port
+  if _free_port(port, tries=1) is None:
+    if args.strict_port:
+      log.error(
+        "port %d is already in use. another `music serve` may still be running:"
+        "\n  lsof -nP -iTCP:%d -sTCP:LISTEN",
+        port,
+        port,
+      )
+      return 1
+    found = _free_port(port + 1)
+    if found is None:
+      log.error("no free port near %d", port)
+      return 1
+    log.warning("port %d is in use; using %d instead", port, found)
+    port = found
+
+  log.info("review ui: http://127.0.0.1:%d", port)
+  uvicorn.run(create_app(), host="127.0.0.1", port=port, log_level="warning")
   return 0
 
 
@@ -337,12 +378,18 @@ def build_parser() -> argparse.ArgumentParser:
   retag_cmd.add_argument("--id", type=int, default=None, help="a single track id")
   retag_cmd.set_defaults(func=cmd_retag)
 
-  serve = sub.add_parser("serve", help="open the review and editing web ui")
-  serve.add_argument("--port", type=int, default=8765)
-  serve.set_defaults(func=cmd_serve)
-  review = sub.add_parser("review", help="alias for serve")
-  review.add_argument("--port", type=int, default=8765)
-  review.set_defaults(func=cmd_serve)
+  for parser_name, helptext in (
+    ("serve", "open the review and editing web ui"),
+    ("review", "alias for serve"),
+  ):
+    sp = sub.add_parser(parser_name, help=helptext)
+    sp.add_argument("--port", type=int, default=8765)
+    sp.add_argument(
+      "--strict-port",
+      action="store_true",
+      help="fail if --port is taken instead of trying the next one",
+    )
+    sp.set_defaults(func=cmd_serve)
 
   doctor = sub.add_parser("doctor", help="check tools, credentials and disk")
   doctor.set_defaults(func=cmd_doctor)

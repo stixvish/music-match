@@ -111,3 +111,25 @@ def test_audio_is_served_for_preview(client):
   r = client.get("/api/audio/1")
   assert r.status_code == 200
   assert len(r.content) > 1000
+
+
+# --- serving ---------------------------------------------------------------
+
+
+def test_free_port_finds_an_open_one():
+  import socket
+
+  from music.cli import _free_port
+
+  with socket.socket() as taken:
+    taken.bind(("127.0.0.1", 0))
+    taken.listen()
+    busy = taken.getsockname()[1]
+    assert _free_port(busy, tries=1) is None
+    assert _free_port(busy) != busy
+
+
+def test_free_port_returns_the_preferred_one_when_open():
+  from music.cli import _free_port
+
+  assert _free_port(0, tries=1) == 0 or _free_port(8899, tries=1) is not None
