@@ -1,0 +1,20 @@
+name: nightly
+
+# Catches an essentia break or a source-api change before a multi-hour run does.
+on:
+  schedule:
+    - cron: "0 7 * * *"
+  workflow_dispatch:
+
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - run: uv sync --group classify
+      - name: essentia + model download
+        run: uv run pytest -m live -k "classify or model"
+      - name: source adapters against real apis
+        run: uv run pytest -m live -k "sources"
