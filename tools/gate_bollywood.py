@@ -20,6 +20,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
+from music import config, db  # noqa: E402
 from music.classify import Classifier, family_for_identity  # noqa: E402
 from music.normalise import normalise  # noqa: E402
 from music.resolve import Resolver  # noqa: E402
@@ -27,7 +28,6 @@ from music.sources import build_enrichment_sources  # noqa: E402
 from music.sources.acoustid import AcoustId  # noqa: E402
 from music.sources.base import Identity  # noqa: E402
 from music.sources.musicbrainz import MusicBrainz  # noqa: E402
-from music import config, db  # noqa: E402
 
 BOLLYWOOD_TAGS = ("bollywood", "indian pop", "indian", "desi")
 
