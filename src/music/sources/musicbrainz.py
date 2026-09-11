@@ -406,6 +406,18 @@ def _as_int(value: object) -> int | None:
     return None
 
 
+def recording_artist(recording: dict) -> str:
+  """Read the credited artist off a recording.
+
+  Args:
+    recording: A raw recording dict.
+
+  Returns:
+    The primary credited artist, or an empty string.
+  """
+  return _credit_name(recording.get("artist-credit"))
+
+
 def _credit_name(credit: object) -> str:
   if isinstance(credit, list) and credit:
     first = credit[0]

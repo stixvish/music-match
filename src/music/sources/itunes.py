@@ -15,7 +15,7 @@ import urllib.request
 from collections.abc import Sequence
 
 from music.sources import cache
-from music.sources.base import FieldCandidate, Identity
+from music.sources.base import FieldCandidate, Identity, best_result
 from music.sources.ratelimit import RateLimiter, with_backoff
 
 log = logging.getLogger(__name__)
@@ -136,4 +136,10 @@ class ITunes:
       log.warning("itunes lookup failed: %s", exc)
       return []
     results = payload.get("results") or []
-    return candidates_from(results[0]) if results else []
+    best = best_result(
+      identity,
+      results,
+      artist=lambda r: str(r.get("artistName") or ""),
+      title=lambda r: str(r.get("trackName") or ""),
+    )
+    return candidates_from(best) if best else []

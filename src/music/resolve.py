@@ -10,16 +10,31 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from music.identify import Evidence, Match, variant_mismatch
+from music.identify import (
+  PLAUSIBLE,
+  Evidence,
+  Match,
+  match_score,
+  variant_mismatch,
+)
 from music.sources.acoustid import AcoustId
 from music.sources.base import FieldCandidate, Identity
-from music.sources.musicbrainz import MusicBrainz, select_release
+from music.sources.musicbrainz import (
+  MusicBrainz,
+  recording_artist,
+  select_release,
+)
 
 log = logging.getLogger(__name__)
 
 # how many of acoustid's linked mbids to inspect. a single fingerprint can map
 # to a dozen near-duplicate musicbrainz entries for the same song.
 MBID_PROBE = 3
+
+# A release credited to the searched artist is the strongest single signal
+# that the fingerprint linked to the right recording, so it outweighs a
+# moderate difference in how the title is written.
+RELEASE_MATCH_BONUS = 0.25
 
 
 @dataclass
@@ -97,23 +112,43 @@ class Resolver:
       return None
     top = matches[0]
 
-    best: tuple[dict, list] | None = None
-    for mbid in top.recording_ids[:MBID_PROBE]:
+    # An AcoustID entry links many recordings in no meaningful order, so every
+    # probed one is scored against the text identity rather than the first
+    # being taken. A matching *release* is still the strongest signal, but it
+    # is no longer the only thing checked: "Last Night" matched a recording
+    # whose releases were all wrong, and the first recording — Metro Station's
+    # "California" — was kept anyway (SPEC.md §12).
+    scored: list[tuple[float, int, dict]] = []
+    for index, mbid in enumerate(top.recording_ids[:MBID_PROBE]):
       try:
         recording = self._mb.recording(mbid)
       except Exception as exc:  # noqa: BLE001 - try the next mbid
         log.debug("mbid lookup failed for %s: %s", mbid[:8], exc)
         continue
-      releases = self._mb.releases_for(recording)
-      if select_release(releases, identity.artist) is not None:
-        best = (recording, releases)
-        break
-      if best is None:
-        best = (recording, releases)
-    if best is None:
-      return None
+      score = match_score(
+        identity.artist,
+        identity.title,
+        recording_artist(recording),
+        str(recording.get("title") or ""),
+      )
+      if select_release(self._mb.releases_for(recording), identity.artist):
+        score += RELEASE_MATCH_BONUS
+      scored.append((score, -index, recording))
 
-    recording, _ = best
+    if not scored:
+      return None
+    score, _, recording = max(scored, key=lambda item: (item[0], item[1]))
+    if score < PLAUSIBLE:
+      # nothing the fingerprint linked to resembles what we searched for.
+      # falling through to the first recording is how twelve tracks were
+      # published as the wrong song at confidence 0.95.
+      log.info(
+        "acoustid match rejected for %s - %s: best linked recording scored %.2f",
+        identity.artist[:30],
+        identity.title[:40],
+        score,
+      )
+      return None
     candidates = list(self._mb.candidates_from(recording, identity))
     delta = None
     if identity.duration_s and recording.get("length"):

@@ -105,6 +105,9 @@
 - [x] **t35** arbitration accuracy: agreement beats precedence on every
   factual field; compilation test uses the arbitrated artist; unbracketed
   album editions group. 12 wrong artists and 12 wrong albums -> 0 (§12)
+- [x] **t36** result selection: one scorer for every source; itunes/spotify
+  rank the five they fetch; acoustid scores each linked recording and
+  rejects the match when none resembles the query (§12)
 - [ ] **cp7** review 50 real items, measure seconds/item vs §9's assumed 35 s
 
 ## phase 7 — the real run

@@ -19,7 +19,7 @@ import urllib.request
 from collections.abc import Sequence
 
 from music.sources import cache
-from music.sources.base import FieldCandidate, Identity
+from music.sources.base import FieldCandidate, Identity, best_result
 from music.sources.ratelimit import RateLimiter, with_backoff
 
 log = logging.getLogger(__name__)
@@ -155,4 +155,10 @@ class Spotify:
       log.warning("spotify lookup failed: %s", exc)
       return []
     items = ((payload.get("tracks") or {}).get("items")) or []
-    return candidates_from(items[0]) if items else []
+    best = best_result(
+      identity,
+      items,
+      artist=lambda r: str(((r.get("artists") or [{}])[0]).get("name") or ""),
+      title=lambda r: str(r.get("name") or ""),
+    )
+    return candidates_from(best) if best else []

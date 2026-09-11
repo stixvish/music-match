@@ -777,10 +777,74 @@ every source offers only a compilation the album fields are now dropped: an
 empty album is visibly incomplete and gets fixed in review, a wrong one
 propagates into the filename, the folder and both DJ apps.
 
-**Still open:** `parse_response` still takes `recordings[0]`. The arbitration
-fix masks it, but the underlying fingerprint match is still chosen without
-reference to the text identity, which is why `identity_confidence` reads 0.95
-on tracks that were wrong.
+### result selection — one scorer, three call sites
+
+Every source was asked for several results and used only the first. iTunes and
+Spotify each fetch five and kept `results[0]`; AcoustID links many recordings
+in no meaningful order and kept `recordings[0]`. Re-scoring the 100 cached
+iTunes responses from the first run found **13 where a better result had been
+fetched and discarded unexamined**, almost all of one shape — position zero is
+a remaster, live cut or re-recording, and the original is further down:
+
+```
+Train — Hey, Soul Sister      [0] (Country Mix)              [3] plain  <- correct
+zayn — PILLOWTALK             [0] (The Living Room Session)  [1] plain  <- correct
+Taylor Swift — Love Story     [0] (Taylor's Version)         [4] plain  <- correct
+Justin Bieber — Beauty And A Beat
+                              [0] Baby (feat. Ludacris)      [2] correct song
+```
+
+That had a second-order effect: it is *why* iTunes and Spotify kept disagreeing
+on version suffixes, which split them into separate groups and let MusicBrainz
+win the arbitration above. One cause, two symptoms.
+
+`identify.match_score` now answers "which of these is the right one" for every
+source:
+
+```
+0.7 * (0.7 * exact_title_ratio + 0.3 * core_title_ratio) + 0.3 * artist_ratio
+  - 0.25 if the result carries a version designation the query did not ask for
+  - 0.12 if it carries a VARIANT_WORD the query did not ask for
+```
+
+Three deliberate choices:
+
+- **Title dominates, artist supports rather than gates.** The query artist is
+  often a YouTube channel (`jayseanworldwide`, `push baby`, `iyazlive`), so a
+  weak artist match must not veto a perfect title. Within one source's results
+  the query is constant, so a low artist weight still ranks correctly.
+- **An exact rendering outscores a matching core.** `Love Story` and
+  `Love Story (Taylor's Version)` share a core and are different recordings.
+- **The version penalty does not use `VARIANT_WORDS`.** That list feeds
+  `confidence`, and adding "remix" to it would drop every legitimate remix in
+  an electronic library below auto-accept. The penalty uses `strip_version`'s
+  vocabulary instead, and never applies to a `feat.` clause — that names the
+  same recording more completely, not a different one. Verified: a remix asked
+  for and returned scores 1.00, and a plain query answered with a remix still
+  scores 0.49, ranked lower but not excluded.
+
+**The fingerprint path is gated, not just ranked.** `_by_fingerprint` probes
+three linked MBIDs; it used to take the first whose *release* matched the
+artist and otherwise keep `recording_ids[0]` unexamined. It now scores each
+probed recording against the text identity (a matching release is worth +0.25,
+still the strongest single signal) and **returns no match at all** when the
+best scores below `PLAUSIBLE` (0.45). Measured on the first run: the
+catastrophic mismatches scored 0.14–0.36, every correct match 0.58 or above.
+
+This is what actually repairs `identity_confidence`. Arbitration rescued those
+twelve tracks because two sources happened to be right; the confidence still
+read 0.95, so the review queue never saw them, and a track with only one good
+source would still have published silently wrong.
+
+**Documented limit:** a *cover* is not caught by the gate, because it carries
+the right title — `Luke Conard - We Are Never Ever Getting Back Together`
+scores 0.75 against a Taylor Swift query. Ranking handles it (the original
+outscores the cover), but the gate alone will not reject one.
+
+**Still open:** the cover case above, and a query artist that is an
+unrecognisable channel name (`jayseanworldwide`) still narrows which sources
+answer at all — `Down` was found by MusicBrainz alone, which is how it reached
+a compilation.
 
 ## 13. operational concerns
 

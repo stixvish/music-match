@@ -6,7 +6,7 @@ continues, which is why Beatport — the only source with no official api, and
 the one most likely to break — is isolated behind this (SPEC.md §7).
 """
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -74,3 +74,40 @@ class Source(Protocol):
       Candidates, possibly empty. Never raises for a simple miss.
     """
     ...
+
+
+def best_result[T](
+  identity: Identity,
+  results: Sequence[T],
+  *,
+  artist: Callable[[T], str],
+  title: Callable[[T], str],
+) -> T | None:
+  """Pick the result that best renders the identity we searched for.
+
+  Every text source is asked for several results and used to keep only the
+  first. Position one is frequently a remaster, a live cut or a re-recording
+  with the original further down — iTunes returned `Love Story (Taylor's
+  Version)` ahead of `Love Story`, and `Baby (feat. Ludacris)` ahead of
+  `Beauty and a Beat` — so the other four were paid for and discarded
+  unexamined (SPEC.md §12).
+
+  Args:
+    identity: What we searched for.
+    results: The source's raw results, in its own order.
+    artist: Reads the artist name out of one result.
+    title: Reads the title out of one result.
+
+  Returns:
+    The best result, or None when there are none. Ties keep the source's own
+    ordering, so a source that already ranks well is never made worse.
+  """
+  from music.identify import match_score
+
+  if not results:
+    return None
+  scored = [
+    (match_score(identity.artist, identity.title, artist(r), title(r)), -index, r)
+    for index, r in enumerate(results)
+  ]
+  return max(scored, key=lambda item: (item[0], item[1]))[2]
