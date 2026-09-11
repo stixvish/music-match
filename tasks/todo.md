@@ -39,9 +39,9 @@
   - accept: table from §12 reproduced exactly; version-variant guard penalises
     `(instrumental)` when unrequested
   - verify: unit tests per row; the `SMASH!` case is a regression test
-- [>] **cp2** **go/no-go** — measured **61.5%** (96 tracks, musicbrainz only,
-  pre-redownload audio). gate as written says stop and rethink. see
-  `tasks/cp2-results.md` — the threshold placement is itself in question.
+- [x] **cp2** **informational** — measured **61.5%** (96 tracks, musicbrainz
+  only, pre-redownload audio). see `tasks/cp2-results.md`. the binding
+  go/no-go moved to **cp4**, where all five sources and clean audio exist.
 
 ## phase 2 — acquisition is real
 
@@ -61,7 +61,9 @@
 - [ ] **t20** spotify adapter + cassettes
 - [ ] **t21** itunes search adapter + cassettes (artwork)
 - [ ] **t22** url override: spotify/mb/discogs/beatport link → exact identity
-- [ ] **cp4** re-measure the same 100 tracks; ci green with no network
+- [ ] **cp4** **BINDING GO/NO-GO** — re-measure the same 100 tracks with all
+  sources + art-track audio. ≥75% proceed · 65–75% revise §9 · <65% rethink.
+  ci green with no network.
 
 ## phase 4 — classify + arbitrate
 
