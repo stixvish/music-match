@@ -617,3 +617,79 @@ def test_the_loose_pass_only_runs_when_nothing_agrees_exactly():
   # musicbrainz+discogs also agree, two each — precedence breaks the tie, and
   # the remix is not silently flattened into the original
   assert got["title"][0] in ("Delilah", "Delilah [Tom Santa Remix]")
+
+
+# --- artwork belongs to the release we tagged ------------------------------
+
+
+def test_artwork_comes_from_the_source_that_supplied_the_album():
+  """The bug behind almost every wrong cover in the first real library.
+
+  MusicBrainz carries no images, so whenever it won the album — which is most
+  of the time for pop — artwork fell to iTunes by its own precedence, showing
+  the sleeve of whichever release *iTunes* had matched. Every text field was
+  right and the picture was from another record.
+  """
+  got = resolved(
+    arbitrate(
+      [
+        cand("album", "The Juicebox", "musicbrainz"),
+        cand("artwork_url", "https://caa/juicebox.jpg", "musicbrainz"),
+        cand("album", "The Juice, Vol. II", "itunes"),
+        cand("artwork_url", "https://itunes/vol2.jpg", "itunes"),
+      ],
+      family="r&b-soul",
+    )
+  )
+  assert got["album"][0] == "The Juicebox"
+  assert got["artwork_url"][0] == "https://caa/juicebox.jpg"
+
+
+def test_artwork_falls_to_a_source_naming_the_same_release():
+  """When the album source has no cover, one describing the same album wins."""
+  got = resolved(
+    arbitrate(
+      [
+        cand("album", "The Juicebox", "musicbrainz"),
+        cand("album", "The Juice, Vol. II", "itunes"),
+        cand("artwork_url", "https://itunes/vol2.jpg", "itunes"),
+        cand("album", "The Juicebox", "spotify"),
+        cand("artwork_url", "https://spotify/juicebox.jpg", "spotify"),
+      ],
+      family="r&b-soul",
+    )
+  )
+  assert got["artwork_url"][0] == "https://spotify/juicebox.jpg"
+
+
+def test_an_edition_still_counts_as_the_same_release_for_artwork():
+  got = resolved(
+    arbitrate(
+      [
+        cand("album", "Planet Pit", "musicbrainz"),
+        cand("album", "Planet Pit (Deluxe Version)", "spotify"),
+        cand("artwork_url", "https://spotify/planetpit.jpg", "spotify"),
+      ],
+      family="pop",
+    )
+  )
+  assert got["artwork_url"][0] == "https://spotify/planetpit.jpg"
+
+
+def test_artwork_is_kept_when_no_source_matches_the_album():
+  """A track must never lose its cover entirely; precedence is the last resort."""
+  got = resolved(
+    arbitrate(
+      [
+        cand("album", "Some Album", "musicbrainz"),
+        cand("artwork_url", "https://itunes/other.jpg", "itunes"),
+      ],
+      family="pop",
+    )
+  )
+  assert got["artwork_url"][0] == "https://itunes/other.jpg"
+
+
+def test_no_artwork_anywhere_resolves_to_nothing():
+  got = resolved(arbitrate([cand("album", "Some Album", "musicbrainz")], family="pop"))
+  assert "artwork_url" not in got

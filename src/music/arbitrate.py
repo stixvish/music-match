@@ -120,7 +120,10 @@ _BASE: dict[str, tuple[str, ...]] = {
   "remixer": ("derived", "musicbrainz", "discogs"),
   "mix_name": ("derived", "musicbrainz"),
   "original_artist": ("musicbrainz",),
-  "artwork_url": ("itunes", "spotify"),
+  # musicbrainz first because its cover comes from the Cover Art Archive for
+  # the exact release the album fields came from; the others are the cover of
+  # whichever release they happened to match.
+  "artwork_url": ("musicbrainz", "itunes", "spotify"),
   "bpm": ("local", "beatport"),
   "key": ("local", "beatport"),
 }
@@ -353,15 +356,30 @@ def arbitrate(
 
   # album fields come from a single source, chosen once (SPEC.md §7)
   album_source = _best_album_source(candidates, ranking(family, "album"), artist_value)
+  album_value = ""
   for field in ALBUM_GROUP:
     if album_source is None:
       break
     match = next((c for c in by_field.get(field, []) if c.source == album_source), None)
     if match:
       decisions.append(Decision(field, match.value, match.source))
+      if field == "album":
+        album_value = match.value
+
+  # the cover belongs to the release we just tagged, so it is chosen against
+  # that album rather than by precedence of its own.
+  art = _artwork_for(
+    by_field.get("artwork_url", []),
+    candidates,
+    album_source,
+    album_value,
+    ranking(family, "artwork_url"),
+  )
+  if art is not None:
+    decisions.append(Decision("artwork_url", art.value, art.source))
 
   for field, options in sorted(by_field.items()):
-    if field in ALBUM_GROUP:
+    if field in ALBUM_GROUP or field == "artwork_url":
       continue
     if field == "label":
       options = [c for c in options if not _is_non_label(c.value)]
@@ -490,6 +508,66 @@ def _core_key(field: str, value: str) -> str:
     parts = split_artists(value)
     return _norm(parts[0]) if parts else _norm(value)
   return _norm(re.sub(r"\s*[\(\[][^)\]]*[\)\]]", "", value))
+
+
+def _artwork_for(
+  options: Sequence[FieldCandidate],
+  candidates: Sequence[FieldCandidate],
+  album_source: str | None,
+  album: str,
+  ranked: Sequence[str],
+) -> FieldCandidate | None:
+  """Choose the cover that belongs to the album we tagged.
+
+  Artwork used to be resolved by its own precedence, independently of the
+  album group. MusicBrainz carries no cover art, so whenever it won the album —
+  which is most of the time for pop — the cover fell to iTunes, showing the
+  sleeve of whichever release *iTunes* had matched. Every field agreed and the
+  picture was from another record: `Body & Soul` tagged to "The Juicebox" with
+  the cover of "The Juice, Vol. II", `Outta My Head` tagged to "Free Spirit"
+  with a cover by an unrelated artist.
+
+  A cover is not a matter of taste, which is how it came to be exempted from
+  agreement. It is the cover *of one release*, so it is chosen by release:
+
+  1. the source that supplied the album, if it offers artwork at all
+  2. any source whose own album is the same release (editions included)
+  3. precedence, as a last resort, so a track never loses its art entirely
+
+  Args:
+    options: Artwork candidates.
+    candidates: Every candidate, for reading each source's album.
+    album_source: The source the album group came from, if any.
+    album: The album title that was chosen.
+    ranked: Artwork precedence, used only at step 3.
+
+  Returns:
+    The winning artwork candidate, or None when no source offers one.
+  """
+  usable = [c for c in options if c.value]
+  if not usable:
+    return None
+
+  if album_source:
+    owned = next((c for c in usable if c.source == album_source), None)
+    if owned is not None:
+      return owned
+
+  if album:
+    wanted = _album_key(album)
+    albums = {c.source: c.value for c in candidates if c.field == "album" and c.value}
+    same_release = [c for c in usable if _album_key(albums.get(c.source, "")) == wanted]
+    if same_release:
+      order = list(ranked)
+      return min(
+        same_release,
+        key=lambda c: order.index(c.source) if c.source in order else len(order),
+      )
+
+  order = list(ranked)
+  return min(
+    usable, key=lambda c: order.index(c.source) if c.source in order else len(order)
+  )
 
 
 def _is_non_label(value: str) -> bool:

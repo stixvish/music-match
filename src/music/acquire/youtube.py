@@ -5,7 +5,9 @@ available directly: `channel` and `description` drive art-track detection, and
 `abr` drives the quality gate (SPEC.md §6).
 """
 
+import atexit
 import logging
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -53,6 +55,52 @@ class Download:
     return self.channel.endswith(" - Topic") or (ART_TRACK_MARKER in self.description)
 
 
+_COOKIE_JAR: Path | None = None
+
+
+def _cookie_jar(cfg: YouTubeConfig) -> Path | None:
+  """Extract the browser's cookies once, into a file reused for the run.
+
+  `--cookies-from-browser` re-reads the browser's cookie store on *every*
+  yt-dlp call. On macOS that means unlocking the keychain and decrypting the
+  whole store once per track, which is slow, prompts the user, and reads far
+  more of their browsing data than the job needs.
+
+  The extracted jar lives in a private temp file for the life of the process
+  and is deleted at exit. It is never written into the repository or the
+  config directory — it is an authenticated credential (SPEC.md §13).
+
+  Args:
+    cfg: YouTube settings, for which browser to read.
+
+  Returns:
+    Path to the cookie file, or None if extraction failed — in which case the
+    caller falls back to per-call extraction rather than losing authentication.
+  """
+  global _COOKIE_JAR
+  if _COOKIE_JAR is not None and _COOKIE_JAR.exists():
+    return _COOKIE_JAR
+  try:
+    from yt_dlp.cookies import extract_cookies_from_browser
+
+    jar = extract_cookies_from_browser(cfg.cookie_browser)
+    handle = tempfile.NamedTemporaryFile(  # noqa: SIM115 - lives for the run
+      prefix="music-cookies-", suffix=".txt", delete=False
+    )
+    handle.close()
+    path = Path(handle.name)
+    path.chmod(0o600)
+    jar.save(str(path))
+  except Exception as exc:  # noqa: BLE001 - fall back rather than lose auth
+    log.warning("could not pre-extract cookies (%s); falling back per call", exc)
+    return None
+
+  log.info("extracted %d cookies from %s", len(jar), cfg.cookie_browser)
+  atexit.register(lambda: path.unlink(missing_ok=True))
+  _COOKIE_JAR = path
+  return path
+
+
 def _base_opts(cfg: YouTubeConfig, sink: object | None = None) -> dict[str, object]:
   """Build yt-dlp options with full CLI parity.
 
@@ -79,10 +127,14 @@ def _base_opts(cfg: YouTubeConfig, sink: object | None = None) -> dict[str, obje
   Returns:
     An options dict suitable for `yt_dlp.YoutubeDL`.
   """
+  cookies = _cookie_jar(cfg)
   parsed = yt_dlp.parse_options(
     [
-      "--cookies-from-browser",
-      cfg.cookie_browser,
+      *(
+        ["--cookies", str(cookies)]
+        if cookies
+        else ["--cookies-from-browser", cfg.cookie_browser]
+      ),
       "--extractor-args",
       f"youtube:player_client={cfg.player_client}",
       "--format",

@@ -30,6 +30,7 @@ class ReleaseInfo(BaseModel):
   """A release a recording appears on, for release selection (SPEC.md §7)."""
 
   release_id: str
+  release_group_id: str = ""
   title: str
   track_count: int = 0
   track_number: int | None = None

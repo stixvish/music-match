@@ -9,6 +9,28 @@ from music import db
 from music.web import create_app
 
 
+@pytest.fixture(autouse=True)
+def stub_spotify(monkeypatch):
+  """Answer track-by-id lookups locally; no test here may reach the network."""
+  from music.sources import spotify
+  from music.sources.base import FieldCandidate
+
+  monkeypatch.setenv("SPOTIFY_CLIENT_ID", "test-id")
+  monkeypatch.setenv("SPOTIFY_CLIENT_SECRET", "test-secret")
+  monkeypatch.setattr(
+    spotify.Spotify, "__init__", lambda self, conn, a, b: setattr(self, "_conn", conn)
+  )
+  monkeypatch.setattr(
+    spotify.Spotify,
+    "track",
+    lambda self, track_id: [
+      FieldCandidate(field="title", value="Lost", source="spotify"),
+      FieldCandidate(field="artist", value="Frank Ocean", source="spotify"),
+      FieldCandidate(field="album", value="channel ORANGE", source="spotify"),
+    ],
+  )
+
+
 @pytest.fixture
 def client(tmp_path, synth_audio):
   path = tmp_path / "w.db"
@@ -89,7 +111,13 @@ def test_accepting_clears_the_queue(client):
   assert client.get("/api/tracks?status=review").json() == []
 
 
-def test_url_override_is_parsed_and_stored(client):
+def test_url_override_is_parsed_and_fetched(client):
+  """Renamed from `..._is_parsed_and_stored`, which is what was wrong with it.
+
+  Storing the link was all it ever did: nothing read the row back, so the one
+  lever meant to rescue the hardest review items changed nothing at all while
+  reporting success.
+  """
   r = client.post(
     "/api/track/1/url",
     json={"url": "https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT"},
@@ -97,6 +125,7 @@ def test_url_override_is_parsed_and_stored(client):
   assert r.status_code == 200
   assert r.json()["provider"] == "spotify"
   assert r.json()["id"] == "4cOdK2wGLETKBW3PvgPWqT"
+  assert r.json()["fields"] == 3
 
 
 def test_unrecognised_url_is_rejected(client):
@@ -280,3 +309,53 @@ def test_an_empty_query_returns_everything(client):
 def test_a_wildcard_in_the_query_is_not_a_wildcard(client):
   """`%` is a LIKE metacharacter; a user typing it means a literal percent."""
   assert client.get("/api/tracks?q=%").json() == []
+
+
+# --- pasted links ----------------------------------------------------------
+
+
+def test_an_unsupported_link_kind_says_so(client):
+  """Silence was the original bug: the endpoint returned ok and did nothing."""
+  r = client.post(
+    "/api/track/1/url",
+    json={"url": "https://open.spotify.com/album/4m2880jivSbbyEGAKfITCa"},
+  )
+  assert r.status_code == 422
+  assert "not supported" in r.json()["detail"]
+
+
+def test_a_pasted_link_rewrites_the_fields(client):
+  """A link is authoritative: it is fetched and applied, not merely recorded."""
+  r = client.post(
+    "/api/track/1/url",
+    json={"url": "https://open.spotify.com/track/3GZD6HmiNUhxXYf8Gch723"},
+  )
+  assert r.status_code == 200, r.text
+  assert r.json()["title"] == "Lost"
+
+  resolved = {f["field"]: f for f in client.get("/api/track/1").json()["resolved"]}
+  assert resolved["title"]["value"] == "Lost"
+  assert resolved["title"]["decided_by"] == "url_override"
+
+
+def test_a_pasted_link_clears_the_stale_reason_but_keeps_the_track_visible(client):
+  """The link settles the identity; accepting it is still yours to do.
+
+  Dropping the track out of the review list entirely would hide it right when
+  you want to glance at the corrected fields and press Accept — so the reason
+  goes and the row stays.
+  """
+  assert client.get("/api/tracks?status=review").json()[0]["reason"]
+
+  client.post(
+    "/api/track/1/url",
+    json={"url": "https://open.spotify.com/track/3GZD6HmiNUhxXYf8Gch723"},
+  )
+  rows = client.get("/api/tracks?status=review").json()
+  assert len(rows) == 1
+  assert rows[0]["reason"] is None
+  assert rows[0]["identity_confidence"] == 1.0
+
+
+def test_a_nonsense_link_is_still_rejected(client):
+  assert client.post("/api/track/1/url", json={"url": "hello"}).status_code == 400

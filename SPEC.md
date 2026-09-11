@@ -829,6 +829,63 @@ The 14 are all real: six covers, four duration mismatches, three version
 mismatches, and `push baby`/Rixton — the one known false positive, a renamed
 band. §9's budget needs ≥84%, so 86.8% holds.
 
+### the cover belongs to the release, not to a precedence list
+
+Artwork was resolved by its own precedence, independently of the album group.
+MusicBrainz carries no images, so whenever it won the album — most of the time
+for pop — the cover fell to iTunes, showing the sleeve of whichever release
+*iTunes* had matched. Every text field was correct and the picture was from
+another record: `Body & Soul` tagged to "The Juicebox" with the cover of "The
+Juice, Vol. II"; `Outta My Head` tagged to "Free Spirit" with a cover by an
+unrelated artist. **30 of 81 tracks** carried a cover from a different release.
+
+Excluding `artwork_url` from agreement was wrong, and the reasoning behind it —
+"several covers are all genuinely correct" — was wrong too. Genre is a matter
+of granularity; a cover is the cover **of one release**. It is now chosen by
+release:
+
+1. the source that supplied the album, if it offers artwork at all
+2. any source whose own album is the same release, editions included
+3. precedence, last, so a track never loses its art entirely
+
+That alone took wrong-release covers from 30 to 13. The remaining 13 were all
+cases where MusicBrainz correctly chose the *album* while iTunes and Spotify
+offered the *single* — `Icarus II` against `June - Single` — so no source held
+the right cover at all.
+
+**MusicBrainz therefore supplies its own artwork now**, from the Cover Art
+Archive, for the exact release the album fields came from. Availability is
+checked and cached rather than assumed, so a missing cover leaves the field to
+iTunes instead of emitting a URL that 404s at publish time. Measured over 14
+real releases: 13 had art on the release itself, and the one that did not
+(`channel ORANGE`) had it on the release group, so release-then-group gave
+complete coverage.
+
+### a pasted link is fetched, not filed
+
+`POST /api/track/{id}/url` wrote an `override_url` row that **nothing ever
+read**, returned `ok`, and changed nothing. §9 calls manual URL override a
+budget lever — the thing that turns a ninety-second puzzle into ten seconds —
+and it was inert for its whole existence.
+
+The link is now fetched: a Spotify track id goes to `/v1/tracks/{id}`, a
+MusicBrainz recording id to `recording/{mbid}`. Every field comes back written
+as `url_override`, which outranks resolution and survives re-arbitration,
+because the user has stated exactly which recording this is. Unsupported kinds
+return **422 with the reason** rather than a silent success. The track keeps
+its place in the review list with the stale reason cleared, since accepting it
+is still the user's call.
+
+### cookies are extracted once per run
+
+`--cookies-from-browser chrome` was passed on every yt-dlp call, so the browser
+cookie store was re-read — and on macOS the keychain unlocked — once per track.
+Over 2,329 tracks that is 2,329 decryptions of the user's entire cookie store
+for one authenticated session. They are now extracted once into a private temp
+file (mode 600, deleted at exit) and reused. Extraction fell back to per-call
+on failure rather than losing authentication. Measured: 110 cookies, 0.15 s
+once, then free.
+
 ### result selection — one scorer, three call sites
 
 Every source was asked for several results and used only the first. iTunes and

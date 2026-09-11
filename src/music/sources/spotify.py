@@ -25,7 +25,8 @@ from music.sources.ratelimit import RateLimiter, with_backoff
 log = logging.getLogger(__name__)
 
 TOKEN_URL = "https://accounts.spotify.com/api/token"
-SEARCH_URL = "https://api.spotify.com/v1/search"
+API = "https://api.spotify.com/v1"
+SEARCH_URL = f"{API}/search"
 NAME = "spotify"
 
 
@@ -138,6 +139,38 @@ class Spotify:
         self._conn, NAME, tuple(sorted(params.items())), lambda: with_backoff(fetch)
       )
     )
+
+  def track(self, track_id: str) -> Sequence[FieldCandidate]:
+    """Fetch one track by its Spotify id, bypassing search entirely.
+
+    This is what a pasted link is for (SPEC.md §9): the user has told us
+    exactly which recording this is, so nothing is searched, scored or
+    arbitrated against it.
+
+    Args:
+      track_id: The 22-character Spotify track id.
+
+    Returns:
+      Candidates for that track, empty if the lookup fails.
+    """
+
+    def fetch() -> dict:
+      self._limiter.wait()
+      url = f"{API}/tracks/{urllib.parse.quote(track_id)}"
+      request = urllib.request.Request(
+        url, headers={"Authorization": f"Bearer {self._access_token()}"}
+      )
+      with urllib.request.urlopen(request, timeout=30) as response:
+        return dict(json.load(response))
+
+    try:
+      payload = dict(
+        cache.cached(self._conn, NAME, ("track", track_id), lambda: with_backoff(fetch))
+      )
+    except Exception as exc:  # noqa: BLE001 - report it, do not fail the ui
+      log.warning("spotify track lookup failed for %s: %s", track_id, exc)
+      return []
+    return candidates_from(payload)
 
   def lookup(self, identity: Identity) -> Sequence[FieldCandidate]:
     """Return candidates for a track.

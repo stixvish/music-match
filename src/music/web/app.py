@@ -12,7 +12,9 @@ from pydantic import BaseModel
 from music import config, db, elicit, pipeline
 from music.arbitrate import Decision, arbitrate, persist
 from music.publish import publish_track, retag, tag, transcode
-from music.sources.base import FieldCandidate
+from music.sources.base import FieldCandidate, Identity
+from music.sources.musicbrainz import MusicBrainz
+from music.sources.spotify import Spotify
 from music.sources.url_override import parse as parse_url
 
 STATIC = Path(__file__).parent / "static"
@@ -286,23 +288,97 @@ def create_app(database: Path | None = None) -> FastAPI:
 
   @app.post("/api/track/{track_id}/url")
   def url_override(track_id: int, body: UrlOverride) -> dict:
-    """Accept a pasted link as authoritative identity (SPEC.md §9)."""
+    """Take a pasted link as the authoritative identity (SPEC.md §9).
+
+    The link is *fetched*, not just recorded. Until this did that, pasting a
+    Spotify url wrote an `override_url` row that nothing ever read, returned
+    `ok`, and changed nothing — the one feature meant to rescue the hardest
+    review items was inert.
+
+    The fetched fields are written as `url_override`, which outranks every
+    resolved value and survives re-arbitration, because the user has told us
+    exactly which recording this is.
+    """
     reference = parse_url(body.url)
     if reference is None:
       raise HTTPException(status_code=400, detail="unrecognised link")
     conn = connect()
+
+    candidates = _fetch_reference(conn, reference)
+    if not candidates:
+      raise HTTPException(
+        status_code=422,
+        detail=(
+          f"{reference.provider.value} {reference.kind} links are not supported"
+          " yet — paste a Spotify or MusicBrainz track link"
+        ),
+      )
+
     conn.execute(
       "INSERT OR REPLACE INTO resolved_field"
       " (track_id, field, value, source, decided_by)"
       " VALUES (?,'override_url',?,?, 'url_override')",
       (track_id, reference.identifier, reference.provider.value),
     )
+    for candidate in candidates:
+      if not candidate.value:
+        continue
+      conn.execute(
+        "INSERT INTO field_candidate (track_id, field, value, source, confidence)"
+        " VALUES (?,?,?,?,1.0)",
+        (track_id, candidate.field, candidate.value, candidate.source),
+      )
+      conn.execute(
+        "INSERT OR REPLACE INTO resolved_field"
+        " (track_id, field, value, source, decided_by)"
+        " VALUES (?,?,?,?,'url_override')",
+        (track_id, candidate.field, candidate.value, candidate.source),
+      )
+    conn.execute(
+      "UPDATE track SET identity_confidence = 1.0, updated_at = datetime('now')"
+      " WHERE id = ?",
+      (track_id,),
+    )
+    conn.execute("DELETE FROM review_queue WHERE track_id = ?", (track_id,))
+
+    applied = {c.field: c.value for c in candidates if c.value}
     return {
       "ok": True,
       "provider": reference.provider.value,
       "kind": reference.kind,
       "id": reference.identifier,
+      "fields": len(applied),
+      "artist": applied.get("artist", ""),
+      "title": applied.get("title", ""),
+      "album": applied.get("album", ""),
     }
+
+  def _fetch_reference(conn: sqlite3.Connection, reference) -> list[FieldCandidate]:
+    """Fetch the exact entity a pasted link names.
+
+    Args:
+      conn: Open connection, for the response cache.
+      reference: The parsed link.
+
+    Returns:
+      Candidates for that entity, empty when the provider or kind is not
+      supported or the lookup fails.
+    """
+    provider = reference.provider.value
+    if provider == "spotify" and reference.kind == "track":
+      client_id = cfg.credentials.get("SPOTIFY_CLIENT_ID", "")
+      secret = cfg.credentials.get("SPOTIFY_CLIENT_SECRET", "")
+      if not (client_id and secret):
+        return []
+      return list(Spotify(conn, client_id, secret).track(reference.identifier))
+    if provider == "musicbrainz" and reference.kind == "recording":
+      source = MusicBrainz(conn)
+      try:
+        recording = source.recording(reference.identifier)
+      except Exception:  # noqa: BLE001 - reported to the ui as unsupported
+        return []
+      return list(source.candidates_from(recording, Identity(artist="", title="")))
+    return []
 
   @app.get("/api/audio/{track_id}")
   def audio(track_id: int) -> FileResponse:
