@@ -13,7 +13,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
       - run: sudo apt-get update && sudo apt-get install -y ffmpeg
-      - run: uv sync --group classify
+      - run: uv sync --all-groups
       - name: essentia + model download
         run: uv run pytest -m live -k "classify or model"
       - name: source adapters against real apis

@@ -10,6 +10,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
+      - run: uv sync
       - run: uv run ruff format --check .
       - run: uv run ruff check .
 
@@ -18,6 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
+      - run: uv sync
       - run: uv run mypy src
 
   test:
@@ -27,6 +29,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       # ffmpeg synthesizes test audio; no binaries are committed (spec.md §19)
       - run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - run: uv sync
       - run: uv run pytest -m "not live" --cov=src/music --cov-report=term-missing
 
   secrets:
