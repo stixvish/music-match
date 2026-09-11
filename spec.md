@@ -41,7 +41,8 @@ correct tag set.
 | 256 kbps reachable via `web_music` + Premium cookies | downloaded & verified 256012 bps |
 | **Opus 774 retains MORE ultrasonic content than AAC 141** — the steep roll-off is AAC's 44.1 kHz Nyquist wall, not an Opus lowpass | spectral measurement, same track, both streams |
 | Neither difference is audible (all of it above 20 kHz); both are transparent at 256 kbps | — |
-| itag 141 chosen for **sample-rate fidelity** (44.1 kHz native, matching the master; Opus was resampled 44.1→48 by YouTube) and because AIFF at 48 kHz is 8.8% larger | measurement + arithmetic |
+| **Opus cannot encode 44.1 kHz at all** — the codec supports 48 kHz only, so YouTube resamples every 44.1 kHz master up to 48 kHz for itag 774. The AAC stream (141) stays native 44.1 kHz. | xiph/opus issue #43; mastering-forum corroboration |
+| itag 141 chosen for **sample-rate fidelity** (44.1 kHz matches the master; the Opus 48 kHz is manufactured) and because AIFF at 48 kHz is 8.8% larger | measurement + arithmetic |
 | 117 files are music-video rips (channel name as artist, inflated duration) | filename/tag pattern scan |
 | Library is 85% non-electronic (hip-hop/pop/R&B/Bollywood) | genre distribution |
 | essentia-tensorflow works on Python 3.14.7; emits Discogs taxonomy | installed, ran on library files |
