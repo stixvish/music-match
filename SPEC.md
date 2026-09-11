@@ -174,6 +174,37 @@ that a fresh download provides. It never outranks a real source.
 | BPM | local (Essentia). **Rekordbox overwrites `TBPM` with its own analysis; only Serato honours the tag** (§10) |
 | key | local (Essentia). Honoured by *both* apps, and Serato DJ Lite cannot detect key at all — so `TKEY` is load-bearing |
 
+### release selection
+
+Album fields are **resolved as a group, from one chosen release** — never
+arbitrated field by field. Taking the album name from a deluxe edition and the
+track number from the standard produces metadata that is individually defensible
+and collectively wrong.
+
+**Prefer the deluxe edition.** Downloads land on whichever release a source
+happens to return first, so without a rule a single album fragments: some tracks
+filed under *Planet Pit*, others under *Planet Pit (Deluxe)*, and the album view
+splits in two. Choosing the largest edition every time keeps it whole.
+
+Selection, among releases containing this recording:
+
+1. Restrict to release-groups of primary type **Album**. Compilations, live
+   albums and greatest-hits collections are excluded unless the recording
+   appears nowhere else — otherwise a 40-track *Greatest Hits* wins on size.
+2. Prefer the release with the **most tracks**. This is more robust than
+   keyword matching, which misses non-English and inconsistent edition naming.
+3. Tie-break on edition keywords: `deluxe`, `expanded`, `special`,
+   `anniversary`, `complete`, `extended`.
+
+From the chosen release, atomically: `album`, `album_artist`, `track_number`,
+`disc_number`.
+
+**Dates are the exception and must not follow the release.** A deluxe edition
+often ships a year after the original, and §7 wants the *original* release date.
+So `year` and `release_date` come from the **release-group's first release
+date**, not from the selected release. A 2011 track reissued as a 2012 deluxe
+stays a 2011 track that happens to be catalogued under the deluxe edition.
+
 **Rate limiting and caching** (§13) are part of this layer, not an afterthought:
 every source adapter backs off exponentially and every response is cached to
 disk, because resolution will be re-run many times as precedence is tuned.
