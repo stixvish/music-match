@@ -14,7 +14,7 @@ from collections.abc import Sequence
 
 from pydantic import ValidationError
 
-from music.identify import Evidence, Match, variant_mismatch
+from music.identify import Evidence, Match, distinct_rival_gap, variant_mismatch
 from music.sources import cache
 from music.sources.base import FieldCandidate, Identity, ReleaseInfo
 from music.sources.ratelimit import RateLimiter, with_backoff
@@ -192,8 +192,17 @@ class MusicBrainz:
 
     ranked = rank_recordings(recordings, identity.duration_s)
     top = ranked[0]
-    scores = sorted((int(r.get("score") or 0) for r in recordings), reverse=True)
-    gap = (scores[0] - scores[1]) if len(scores) > 1 else 99
+    # rivals that are the same song on another release are not ambiguity
+    gap = distinct_rival_gap(
+      [
+        (
+          str(r.get("title") or ""),
+          float(r["length"]) / 1000 if r.get("length") else None,
+          int(r.get("score") or 0),
+        )
+        for r in ranked
+      ]
+    )
 
     delta = None
     if identity.duration_s and top.get("length"):
