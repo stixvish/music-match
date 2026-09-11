@@ -5,6 +5,12 @@ import sqlite3
 from pathlib import Path
 
 from music.acquire import probe as probe_mod
+from music.acquire.classify_source import (
+  Classification,
+  SourceSignals,
+  Verdict,
+  classify,
+)
 from music.acquire.youtube import (
   Download,
   QualityError,
@@ -14,15 +20,66 @@ from music.acquire.youtube import (
 )
 
 __all__ = [
+  "Classification",
   "Download",
   "QualityError",
+  "SourceSignals",
+  "Verdict",
   "VideoRef",
   "already_have",
+  "classify",
+  "classify_download",
   "download",
   "enumerate_playlist",
+  "flag_video_rip",
   "register",
   "register_local",
 ]
+
+
+def classify_download(
+  item: Download, catalog_duration_s: float | None = None
+) -> Classification:
+  """Decide whether a download is clean album audio or a video rip.
+
+  Args:
+    item: The download.
+    catalog_duration_s: Canonical duration, once resolution knows it.
+
+  Returns:
+    The classification.
+  """
+  return classify(
+    SourceSignals(
+      channel=item.channel,
+      title=item.title,
+      description=item.description,
+      duration_s=item.duration_s,
+      catalog_duration_s=catalog_duration_s,
+    )
+  )
+
+
+def flag_video_rip(
+  conn: sqlite3.Connection, track_id: int, result: Classification
+) -> None:
+  """Record a video-rip verdict and queue the track for review.
+
+  Args:
+    conn: Open connection.
+    track_id: Track to flag.
+    result: The classification.
+  """
+  if not result.is_video_rip:
+    return
+  conn.execute(
+    "UPDATE track SET is_video_rip = 1, updated_at = datetime('now') WHERE id = ?",
+    (track_id,),
+  )
+  conn.execute(
+    "INSERT OR IGNORE INTO review_queue (track_id, reason) VALUES (?, 'video_rip')",
+    (track_id,),
+  )
 
 
 def already_have(conn: sqlite3.Connection, video_id: str) -> bool:
