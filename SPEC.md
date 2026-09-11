@@ -246,15 +246,36 @@ Discogs remains first elsewhere.
 
 ### beatport access and adapter shape
 
-The developer portal at `api.beatport.com/v4/docs/` is **readable with an
-ordinary Beatport account** — no partner status needed to see the reference. A
-full v4 REST API is documented, with three OAuth2 grant flows: authorization
-code, user password, and client credentials.
+Three documentation sites, all readable with an ordinary Beatport account:
 
-What is *not* self-serve is an OAuth application. `/v4/auth/o/applications/`
-returns `404`, and an unauthenticated catalog call returns
-`{"detail":"Authentication credentials were not provided."}`. So a
-`client_id`/`client_secret` still comes from the partner application.
+| Site | Contents |
+|---|---|
+| `api.beatport.com/v4/docs/` | the catalog API reference |
+| `account.beatport.com/docs/` | Identity Service OpenAPI — the auth endpoints |
+| `partnerportal.beatport.com` | integration guides, scopes, token lifetimes |
+
+**Auth lives on a different host from the catalog.** Tokens come from
+`account.beatport.com/o/token/`; API calls go to `api.beatport.com/v4/`.
+
+Grant flows: authorization code (PKCE **mandatory**), user password, and
+**client credentials** — the last is the right one here, since this is a
+server-side tool with no user context and no redirect URI.
+
+Operational facts that shape the implementation:
+
+- **Access tokens last 600 seconds.** A full-library run takes hours, so the
+  adapter must refresh proactively rather than on 401.
+- **Refresh tokens are single-use.** Each refresh returns a new one and revokes
+  the old; the new token must be persisted immediately or access is lost until
+  a fresh authorization. They last 31 days.
+- Scopes (`app:externaltrusted`, `user:dj`, `openid`) determine which routes a
+  token can reach, so available fields depend on what is granted.
+
+What is *not* self-serve is the OAuth application itself.
+`/v4/auth/o/applications/` returns `404`, an unauthenticated catalog call
+returns `{"detail":"Authentication credentials were not provided."}`, and every
+doc page refers to `{client_id provided}` and a `redirect_uri` "shared with
+us". The credentials come from Beatport.
 
 The public store site is separately behind a bot challenge, so scraping it is
 not an alternative route.
