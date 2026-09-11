@@ -77,3 +77,29 @@ acoustid rescued **30 of the 36** tracks musicbrainz could not auto-accept — a
 still to come before cp4: discogs, spotify, itunes, url override, and audio
 re-downloaded as art tracks (which should convert the remaining duration
 mismatches).
+
+
+## after all sources (seed 99, held out)
+
+```
+identity auto-accepted   24/30  (80%)
+
+album / album_artist / artist / disc / isrc / date / title / track / year   97%
+genre                                                                      93%
+label                                                                      73%
+bpm · key · composer · lyricist · mix_name · original_artist · remixer       0%
+```
+
+candidates by source: musicbrainz 253 · itunes 63 · discogs 44 · spotify 31.
+
+**isrc is back at 97%.** option c discarded 1,755 existing isrcs; resolution
+recovers them, so the cost of that decision has largely been repaid.
+
+the zero-coverage fields are known and each has an owner:
+
+- `bpm`, `key` — computed locally by essentia in phase 4, never fetched
+- `composer`, `lyricist` — need musicbrainz work-level relationships
+  (`inc=work-rels+artist-rels`), which the adapter does not request yet
+- `remixer`, `mix_name`, `original_artist` — derivable from the title we
+  already have; no extra request needed
+- `grouping` — ours to fill, not a source's

@@ -57,10 +57,10 @@
 ## phase 3 — resolution is real
 
 - [x] **t18** acoustid fingerprinting → stable id (needs api key)
-- [ ] **t19** discogs adapter + cassettes
-- [ ] **t20** spotify adapter + cassettes
-- [ ] **t21** itunes search adapter + cassettes (artwork)
-- [ ] **t22** url override: spotify/mb/discogs/beatport link → exact identity
+- [x] **t19** discogs adapter + cassettes
+- [x] **t20** spotify adapter + cassettes
+- [x] **t21** itunes search adapter + cassettes (artwork)
+- [x] **t22** url override: spotify/mb/discogs/beatport link → exact identity
 - [ ] **cp4** **BINDING GO/NO-GO** — re-measure the same 100 tracks with all
   sources + art-track audio. ≥75% proceed · 65–75% revise §9 · <65% rethink.
   ci green with no network.
