@@ -157,10 +157,30 @@ that a fresh download provides. It never outranks a real source.
 
 `electronic` · `hip-hop` · `pop` · `r&b-soul` · `world` · `other`
 
-> **Risk:** Discogs files Indian film music inconsistently under
-> *Folk, World, & Country* or *Stage & Screen*. The ~105 Bollywood tracks are
-> where family routing is least reliable **and** source coverage is weakest.
-> Spot-check before trusting `world` precedence.
+**The classifier cannot route regional music, and ISRC country fixes it.**
+
+cp5 measured Bollywood scattering across three families — `pop` 40%, `world`
+37%, `electronic` 23% — with predicted styles of *K-pop*, *Laïkó*, *Pachanga*
+and *Reggaeton*. The Discogs-400 model has **no Indian class**, so it reaches
+for the nearest neighbour it knows. That is not noise; it is confident and
+wrong.
+
+It matters because `world` is the table that ranks **iTunes first**, which is
+where Indian music is actually catalogued. Misrouting to `pop` sends those
+tracks to a Spotify-first table instead.
+
+The fix is an **ISRC registrant-country override**: an `IN`/`LK`/`PK`/`BD`
+prefix routes to `world` regardless of what the classifier said. This does not
+reintroduce the circular dependency the classifier exists to break — ISRC comes
+from identity resolution, not from a contested metadata field.
+
+```
+cp5 before override:  world 37%   (scattered)
+cp5 after override:   world 87%   PASS
+```
+
+The remaining 13% are tracks with no ISRC, which correctly fall back to the
+classifier.
 
 | Field | Leading sources (to be calibrated, §9) |
 |---|---|

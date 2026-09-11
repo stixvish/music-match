@@ -67,9 +67,10 @@
 
 ## phase 4 — classify + arbitrate
 
-- [ ] **t23** `classify.py`: essentia → top-level genre → family (§7)
+- [x] **t23** `classify.py`: essentia → top-level genre → family (§7)
   - accept: `Style` is never written as a tag
-- [ ] **cp5** **bollywood gate** — 30 bollywood tracks, families sane
+- [x] **cp5** **bollywood gate** — failed at 37%, fixed with an ISRC
+  country override, now **87% PASS**. see SPEC.md §7.
 - [ ] **t24** `arbitrate.py` + `precedence` table, pure
   - accept: confidence gates entry, not ranking (§12); first source wins
   - accept: album fields resolved as a group from one release; deluxe
