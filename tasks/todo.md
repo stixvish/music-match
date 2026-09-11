@@ -71,7 +71,7 @@
   - accept: `Style` is never written as a tag
 - [x] **cp5** **bollywood gate** — failed at 37%, fixed with an ISRC
   country override, now **87% PASS**. see SPEC.md §7.
-- [ ] **t24** `arbitrate.py` + `precedence` table, pure
+- [x] **t24** `arbitrate.py` + `precedence` table, pure
   - accept: confidence gates entry, not ranking (§12); first source wins
   - accept: album fields resolved as a group from one release; deluxe
     preferred; dates still come from the release-group's first release (§7)

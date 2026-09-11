@@ -65,7 +65,8 @@ CREATE TABLE IF NOT EXISTS resolved_field (
   field      TEXT    NOT NULL,
   value      TEXT,
   source     TEXT,
-  decided_by TEXT    NOT NULL CHECK (decided_by IN ('precedence','manual','url_override')),
+  decided_by TEXT    NOT NULL
+               CHECK (decided_by IN ('precedence','fallback','manual','url_override')),
   PRIMARY KEY (track_id, field)
 );
 

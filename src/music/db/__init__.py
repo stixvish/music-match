@@ -12,7 +12,7 @@ from pathlib import Path
 SCHEMA = Path(__file__).parent / "schema.sql"
 
 # bumped whenever schema.sql changes in a way that needs a migration step.
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def connect(path: Path) -> sqlite3.Connection:
@@ -47,8 +47,33 @@ def migrate(conn: sqlite3.Connection) -> int:
   if current >= SCHEMA_VERSION:
     return current
   conn.executescript(SCHEMA.read_text(encoding="utf-8"))
+  if 0 < current < 2:
+    _migrate_v1_to_v2(conn)
   conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
   return SCHEMA_VERSION
+
+
+def _migrate_v1_to_v2(conn: sqlite3.Connection) -> None:
+  """Widen `resolved_field.decided_by` to allow 'fallback'.
+
+  SQLite cannot alter a CHECK constraint, so the table is rebuilt. Rows are
+  preserved.
+  """
+  conn.executescript("""
+    CREATE TABLE resolved_field_v2 (
+      track_id   INTEGER NOT NULL REFERENCES track(id) ON DELETE CASCADE,
+      field      TEXT    NOT NULL,
+      value      TEXT,
+      source     TEXT,
+      decided_by TEXT    NOT NULL CHECK (
+        decided_by IN ('precedence','fallback','manual','url_override')
+      ),
+      PRIMARY KEY (track_id, field)
+    );
+    INSERT INTO resolved_field_v2 SELECT * FROM resolved_field;
+    DROP TABLE resolved_field;
+    ALTER TABLE resolved_field_v2 RENAME TO resolved_field;
+  """)
 
 
 @contextmanager
