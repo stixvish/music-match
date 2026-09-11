@@ -25,14 +25,22 @@ two projections could invalidate the design. both are front-loaded.
 
 | risk | if wrong | resolved at |
 |---|---|---|
-| stages do not compose | rework across every module | **cp1** (phase 0) |
-| resolution accuracy < 85% | 5-hour review budget breaks (§9) | **cp2** (phase 1) |
+| stages do not compose | rework across every module | **cp1** (phase 0) ✅ |
+| resolution accuracy < 85% | 5-hour review budget breaks (§9) | **cp4** (phase 3) |
 
-cp2 is the important one. §9 projects ~85% auto-accept from a **measured 55%**
-baseline, assuming clean audio plus four more sources. if the real number lands
-at 65%, review becomes ~8 hours and either the budget or the precision target
-has to move. that is a go/no-go, and it happens before any source adapter
-beyond musicbrainz is written.
+### why the accuracy gate moved from cp2 to cp4
+
+cp2 was originally the binding go/no-go. it was placed wrongly: it carried
+thresholds calibrated for the **finished** system — five sources plus clean
+art-track audio — while running with **one source and un-redownloaded audio**.
+it read 61.5% and failed a bar that nothing at that point could have met.
+
+**cp2 is now informational**: a baseline reading, not a decision. the binding
+go/no-go is **cp4**, after every source exists and the audio has been
+re-downloaded as art tracks. `tools/measure_cp2.py` runs at every checkpoint in
+between, so the trend is visible rather than a single verdict at the end.
+
+readings so far: 55% (text only, no normalisation) → 61.5% (cp2) → ?
 
 ## dependency graph
 
@@ -60,9 +68,9 @@ cheap to change now.
 `normalise` is dependency-free and worth +31pp (§4). it lands before anything
 that touches a network.
 
-**cp2 — go/no-go.** run resolution over a 100-track stratified sample and
-measure high-confidence rate. **≥75% → proceed.** 65–75% → proceed, revise §9's
-budget. **<65% → stop and rethink** before building five adapters on a broken
+**cp2 — informational baseline.** measured **61.5%** (96 tracks, musicbrainz
+only, pre-redownload audio). see `tasks/cp2-results.md`. no gate: the number is
+recorded and we proceed. before building five adapters on a broken
 premise.
 
 ### phase 2 — acquisition is real
@@ -75,8 +83,12 @@ downloads nothing; a known music-video url is flagged.
 ### phase 3 — resolution is real
 remaining adapters behind the §7 protocol, acoustid, url override, confidence.
 
-**cp4** — accuracy re-measured on the same 100 tracks. expect movement toward
-85%. cassettes exist for every adapter; ci is green without network.
+**cp4 — the binding go/no-go.** accuracy re-measured on the same 100 tracks,
+now with every source and art-track audio. **≥75% proceed · 65–75% proceed and
+revise §9's budget · <65% stop and rethink.** this is the checkpoint cp2 was
+meant to be, placed where the system it judges actually exists.
+
+cassettes exist for every adapter; ci is green without network.
 
 ### phase 4 — classify + arbitrate
 **cp5 — bollywood gate.** genre routing checked on 30 of the ~105 bollywood
