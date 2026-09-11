@@ -229,6 +229,41 @@ class MusicBrainz:
     )
     return match, self.lookup(identity)
 
+  def credits(self, recording_id: str) -> list[FieldCandidate]:
+    """Fetch composer and lyricist via work relationships.
+
+    MusicBrainz keeps writer credits on the *work*, not the recording, so this
+    is a two-hop lookup: `recording -> performance relation -> work`, then
+    `work -> artist relations`. That is two extra requests per track at 1 req/s
+    — roughly 78 minutes across a 2,300-track library — which is why it is
+    opt-in. Composer and lyricist are nice-to-haves (SPEC.md §2).
+
+    Args:
+      recording_id: MusicBrainz recording MBID.
+
+    Returns:
+      Composer and lyricist candidates, empty when the work has no credits.
+    """
+    try:
+      recording = self._get(f"recording/{recording_id}", {"inc": "work-rels"})
+    except Exception as exc:  # noqa: BLE001 - credits are optional
+      log.debug("work-rels lookup failed: %s", exc)
+      return []
+
+    work_ids = [
+      rel["work"]["id"]
+      for rel in recording.get("relations", []) or []
+      if (rel.get("work") or {}).get("id")
+    ]
+    if not work_ids:
+      return []
+    try:
+      work = self._get(f"work/{work_ids[0]}", {"inc": "artist-rels"})
+    except Exception as exc:  # noqa: BLE001 - credits are optional
+      log.debug("work artist-rels lookup failed: %s", exc)
+      return []
+    return parse_credits(work)
+
   def lookup(self, identity: Identity) -> Sequence[FieldCandidate]:
     """Return candidates for a track.
 
@@ -332,6 +367,36 @@ def rank_recordings(
     return (delta, -int(rec.get("score") or 0), -len(rec.get("releases") or []))
 
   return sorted(recordings, key=key)
+
+
+def parse_credits(work: dict) -> list[FieldCandidate]:
+  """Extract composer and lyricist from a work's artist relations.
+
+  MusicBrainz distinguishes `composer`, `lyricist` and the combined `writer`.
+  A bare `writer` credit is used for composer only when no explicit composer
+  exists, since it means "wrote it" without saying which half.
+
+  Args:
+    work: A work object fetched with `inc=artist-rels`.
+
+  Returns:
+    Candidates, empty when the work carries no credits.
+  """
+  by_type: dict[str, list[str]] = {}
+  for rel in work.get("relations", []) or []:
+    name = (rel.get("artist") or {}).get("name")
+    kind = str(rel.get("type") or "").casefold()
+    if name and kind in ("composer", "lyricist", "writer"):
+      by_type.setdefault(kind, []).append(str(name))
+
+  out: list[FieldCandidate] = []
+  composer = by_type.get("composer") or by_type.get("writer") or []
+  if composer:
+    out.append(FieldCandidate(field="composer", value=", ".join(composer), source=NAME))
+  lyricist = by_type.get("lyricist") or []
+  if lyricist:
+    out.append(FieldCandidate(field="lyricist", value=", ".join(lyricist), source=NAME))
+  return out
 
 
 def _as_int(value: object) -> int | None:
