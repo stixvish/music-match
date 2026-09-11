@@ -563,7 +563,7 @@ correction surface. Anything the pipeline can decide, it decides.
 
 ```
 music/
-  spec.md  claude.md  pyproject.toml  .editorconfig  lefthook.yml
+  SPEC.md  CLAUDE.md  pyproject.toml  .editorconfig  lefthook.yml
   .github/workflows/
     checks.yml            lint · format · types · tests · secrets · spec
     nightly.yml           live checks (essentia, source adapters)
@@ -699,7 +699,7 @@ and `pydocstyle convention = "google"` is active. Note the convention enforces
 that docstrings exist and that recognised sections are well-formed; it will not
 reject a numpy-style docstring, so that stays a review matter.
 
-Line length 88. Lowercase filenames, headings and prose (`claude.md`).
+Line length 88. Lowercase filenames, headings and prose (`CLAUDE.md`).
 `.editorconfig` covers markdown, yaml and toml, which ruff does not.
 
 ### ci
@@ -763,4 +763,4 @@ multi-hour run does.
 - Overwrite a manual edit with resolver output (§15).
 - Publish a track below the confidence threshold — unresolved tracks stay out of
   the library (§12).
-- Add Claude as a commit co-author (`claude.md`).
+- Add Claude as a commit co-author (`CLAUDE.md`).
