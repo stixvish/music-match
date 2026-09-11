@@ -172,13 +172,29 @@ kbd {
 /* --- status filter ------------------------------------------------------ */
 
 .tabs { display: flex; gap: 0.25rem; }
+/* an unselected tab is a control you can press, not a disabled one. muted
+   text on a transparent ground reads as unavailable, so the unselected state
+   keeps full-contrast text and earns its difference from a filled ground. */
 .tab {
   font-size: 0.75rem; padding: 0.2rem 0.55rem; border-radius: 999px;
-  border: 1px solid var(--line); background: transparent; color: var(--muted);
-  cursor: pointer;
+  border: 1px solid var(--line); background: var(--surface-solid);
+  color: var(--text); cursor: pointer;
 }
-.tab[aria-pressed="true"] { background: var(--surface-solid); color: var(--text); font-weight: 600; }
+.tab:hover { border-color: var(--accent); }
+.tab[aria-pressed="true"] {
+  background: var(--accent); border-color: transparent; color: #fff; font-weight: 600;
+}
 .tab:active { transform: scale(0.97); }
+.tab .n { opacity: 0.6; font-variant-numeric: tabular-nums; }
+
+/* --- published state ---------------------------------------------------- */
+
+.pill.done { color: var(--good); border-color: var(--good); }
+.path {
+  font-family: "SF Mono", ui-monospace, monospace; font-size: 0.6875rem;
+  color: var(--muted); word-break: break-all; margin: 0 0 0.5rem;
+}
+.path a { color: var(--accent); text-decoration: none; }
 
 /* --- artwork ------------------------------------------------------------ */
 

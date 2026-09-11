@@ -10,11 +10,26 @@ from pydantic import BaseModel
 
 from music import config, db
 from music.arbitrate import Decision, arbitrate, persist
-from music.publish import publish_track, retag, tag
+from music.publish import publish_track, retag, tag, transcode
 from music.sources.base import FieldCandidate
 from music.sources.url_override import parse as parse_url
 
 STATIC = Path(__file__).parent / "static"
+
+# Media types a browser will actually decode. `mimetypes` guesses
+# `audio/mp4a-latm` for .m4a and `audio/x-aiff` for .aiff; Chrome reports an
+# empty `canPlayType` for both, so the player silently sits at 0:00 instead of
+# erroring. AIFF is absent deliberately: no browser plays it (SPEC.md §15).
+PLAYABLE = {
+  ".flac": "audio/flac",
+  ".m4a": "audio/mp4",
+  ".mp3": "audio/mpeg",
+  ".mp4": "audio/mp4",
+  ".ogg": "audio/ogg",
+  ".opus": "audio/ogg",
+  ".wav": "audio/wav",
+  ".webm": "audio/webm",
+}
 
 
 class FieldEdit(BaseModel):
@@ -241,7 +256,13 @@ def create_app(database: Path | None = None) -> FastAPI:
 
   @app.get("/api/audio/{track_id}")
   def audio(track_id: int) -> FileResponse:
-    """Serve the audio so a reviewer can hear the track (SPEC.md §15)."""
+    """Serve the audio so a reviewer can hear the track (SPEC.md §15).
+
+    The download source is served in preference to the published file. It is
+    what the browser can actually decode, and it is ~6x smaller than the AIFF,
+    so the player is responsive. Only when staging has been cleared is a
+    preview encoded from the published file.
+    """
     conn = connect()
     row = conn.execute(
       "SELECT t.published_path, s.staging_path FROM track t"
@@ -250,9 +271,22 @@ def create_app(database: Path | None = None) -> FastAPI:
     ).fetchone()
     if row is None:
       raise HTTPException(status_code=404, detail="no such track")
-    for candidate in (row["published_path"], row["staging_path"]):
-      if candidate and Path(candidate).exists():
-        return FileResponse(candidate)
+
+    source = Path(row["staging_path"]) if row["staging_path"] else None
+    if source and source.exists():
+      media = PLAYABLE.get(source.suffix.lower())
+      if media:
+        return FileResponse(source, media_type=media, headers=no_cache)
+
+    published = Path(row["published_path"]) if row["published_path"] else None
+    if published and published.exists():
+      preview = cfg.paths.staging / f"{track_id}.preview.m4a"
+      # audio never changes once published — only tags do — so the preview is
+      # cached indefinitely.
+      if not preview.exists() and not transcode.to_preview(published, preview):
+        raise HTTPException(status_code=503, detail="could not build a preview")
+      return FileResponse(preview, media_type="audio/mp4", headers=no_cache)
+
     raise HTTPException(status_code=404, detail="audio file missing")
 
   @app.get("/api/artwork/{track_id}")

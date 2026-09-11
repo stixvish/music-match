@@ -70,7 +70,7 @@ function renderTabs() {
   // wayfinding: the counts answer "what's here", the tabs "where can I go"
   $('queue-count').innerHTML = ['review', 'published', 'all']
     .map((f) => `<button class="tab" data-f="${f}" aria-pressed="${state.filter === f}">
-      ${f} ${c[f] || 0}</button>`)
+      ${f} <span class="n">${c[f] || 0}</span></button>`)
     .join('');
   for (const el of document.querySelectorAll('.tab')) {
     el.addEventListener('click', () => {
@@ -84,6 +84,7 @@ function renderTabs() {
 function renderQueue() {
   $('queue').innerHTML = state.list.map((t, i) => {
     const pills = [
+      t.published_path ? '<span class="pill done">published</span>' : '',
       t.reason ? `<span class="pill review">${esc(t.reason.replace('_', ' '))}</span>` : '',
       t.is_video_rip ? '<span class="pill rip">video rip</span>' : '',
       t.identity_confidence != null ? `<span class="pill">${t.identity_confidence.toFixed(2)}</span>` : '',
@@ -153,9 +154,14 @@ function renderTrack() {
         </div>
       </div>
     </div>
-    <audio id="audio" controls preload="none" src="/api/audio/${t.id}"></audio>
+    <!-- metadata, not none: the duration appears without pressing play, so a
+         working player never looks like a broken one. the files are local. -->
+    <audio id="audio" controls preload="metadata" src="/api/audio/${t.id}"></audio>
+    ${t.published_path
+      ? `<p class="path">Published to ${esc(t.published_path)}</p>`
+      : ''}
     <div style="display:flex;gap:.5rem;margin:.5rem 0 1rem">
-      <button class="primary" id="accept">Accept <kbd>↵</kbd></button>
+      <button class="primary" id="accept">${t.published_path ? 'Re-tag' : 'Accept'} <kbd>↵</kbd></button>
       <input class="url" id="url" type="text" placeholder="Paste a Spotify / MusicBrainz / Discogs link…">
     </div>
     ${fields.map((f) => {

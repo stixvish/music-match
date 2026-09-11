@@ -1,5 +1,7 @@
 """Web API (tasks/todo.md t28-t30, SPEC.md §15)."""
 
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -111,6 +113,60 @@ def test_audio_is_served_for_preview(client):
   r = client.get("/api/audio/1")
   assert r.status_code == 200
   assert len(r.content) > 1000
+
+
+def test_audio_content_type_is_one_a_browser_decodes(client):
+  """A 200 with bytes is not enough — the media type has to be decodable.
+
+  `mimetypes` guesses `audio/mp4a-latm` for .m4a, which names a raw LATM
+  stream rather than the MP4 container. Chrome returns an empty `canPlayType`
+  for it, so the player sits silently at 0:00 with no error anywhere
+  (SPEC.md §15). The assertion above passed throughout, which is exactly why
+  this one exists.
+  """
+  assert client.get("/api/audio/1").headers["content-type"] == "audio/mp4"
+
+
+def test_audio_prefers_the_source_over_the_published_file(client):
+  """The download source is served even once an AIFF exists.
+
+  No browser decodes AIFF, and the source is several times smaller.
+  """
+  client.post("/api/track/1/accept")
+  published = Path(client.get("/api/tracks").json()[0]["published_path"])
+  assert published.suffix == ".aiff"
+  r = client.get("/api/audio/1")
+  assert r.headers["content-type"] == "audio/mp4"
+  assert len(r.content) < published.stat().st_size
+
+
+def test_audio_falls_back_to_a_preview_when_the_source_is_gone(client, tmp_path):
+  """Clearing staging must not cost the ability to audition the library."""
+  client.post("/api/track/1/accept")
+  conn = db.connect(tmp_path / "w.db")
+  conn.execute("UPDATE source_file SET staging_path=?", (str(tmp_path / "gone.m4a"),))
+  conn.commit()
+  conn.close()
+  r = client.get("/api/audio/1")
+  assert r.status_code == 200
+  assert r.headers["content-type"] == "audio/mp4"
+  assert len(r.content) > 1000
+
+
+def test_audio_404s_when_nothing_is_on_disk(client, tmp_path):
+  conn = db.connect(tmp_path / "w.db")
+  conn.execute("UPDATE source_file SET staging_path=?", (str(tmp_path / "gone.m4a"),))
+  conn.commit()
+  conn.close()
+  assert client.get("/api/audio/1").status_code == 404
+
+
+def test_published_tracks_stay_visible_with_their_path(client):
+  """A published track is reviewable after the fact, not filtered out of sight."""
+  client.post("/api/track/1/accept")
+  rows = client.get("/api/tracks?status=published").json()
+  assert len(rows) == 1
+  assert rows[0]["published_path"].endswith(".aiff")
 
 
 # --- serving ---------------------------------------------------------------

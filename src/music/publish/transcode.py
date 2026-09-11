@@ -82,3 +82,42 @@ def extract_artwork(source: Path, dest: Path) -> Path | None:
     check=False,
   )
   return dest if result.returncode == 0 and dest.exists() else None
+
+
+def to_preview(source: Path, dest: Path) -> Path | None:
+  """Encode a small AAC preview so a reviewer can hear a published file.
+
+  No browser decodes AIFF — Chrome reports an empty `canPlayType` for both
+  `audio/x-aiff` and `audio/aiff` (SPEC.md §15) — so a published track has to
+  be re-encoded before it can be auditioned. Only reached once the download
+  source has been cleared; while staging survives, that file is served
+  directly and nothing is encoded.
+
+  Args:
+    source: A published AIFF.
+    dest: Where to write the preview.
+
+  Returns:
+    The preview path, or None if ffmpeg fails. Losing a preview is not worth
+    failing the request over.
+  """
+  dest.parent.mkdir(parents=True, exist_ok=True)
+  result = subprocess.run(
+    [
+      "ffmpeg",
+      "-y",
+      "-v",
+      "error",
+      "-i",
+      str(source),
+      "-vn",
+      "-c:a",
+      "aac",
+      "-b:a",
+      "192k",
+      str(dest),
+    ],
+    capture_output=True,
+    check=False,
+  )
+  return dest if result.returncode == 0 and dest.exists() else None

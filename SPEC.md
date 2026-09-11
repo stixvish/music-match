@@ -794,6 +794,23 @@ any time — not just on the ones the pipeline doubted.
 
 - **Audio preview.** Non-negotiable for review — the common failure is a
   plausible-looking match that is the wrong recording. You have to hear it.
+  The preview serves the **download source**, not the published AIFF. Measured
+  with `canPlayType` in Chrome 2026-09-11:
+
+  | media type | Chrome |
+  |---|---|
+  | `audio/mp4a-latm` (what `mimetypes` guesses for `.m4a`) | *(empty)* |
+  | `audio/x-aiff`, `audio/aiff` | *(empty)* |
+  | `audio/mp4` | `maybe` |
+  | `audio/wav` | `maybe` |
+  | `audio/flac` | `probably` |
+
+  No browser decodes AIFF, and the guessed type for `.m4a` names a raw LATM
+  stream rather than the MP4 container — so both the published file *and* the
+  staging file failed to play, silently, with the player showing `0:00`. The
+  source is also ~6x smaller (7 MB vs 40 MB). Once staging is cleared, a
+  192 kbps AAC preview is encoded from the published file on first request and
+  cached (2.5 s cold, instant after).
 - **Provenance on every field.** Show which source supplied the value and what
   the alternatives were, read straight from `field_candidate`. A wrong tag
   should be one click from *why*.
@@ -807,6 +824,11 @@ any time — not just on the ones the pipeline doubted.
   reminder whenever a published file is edited.
 - **Bulk operations.** Multi-select for the predictable batch fixes — a whole
   mislabelled genre family, or a run of tracks from one bad playlist.
+- **Published tracks stay reachable.** The status filter defaults to `review`,
+  but a published track must remain one click away, show where it was filed,
+  and say that its primary action re-tags rather than publishes. An unselected
+  filter is styled as a pressable control — muted text on a transparent ground
+  reads as disabled, and made the published tracks look unavailable.
 
 ### non-requirements
 
