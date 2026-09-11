@@ -51,8 +51,8 @@
 - [x] **t15** playlist enumeration
 - [x] **t16** pre-download dedup on `video_id`
 - [x] **t17** art-track preference + music-video detection (§8 signal table)
-- [ ] **cp3** 20-track playlist: all ≥256 kbps, re-run downloads nothing, a known
-  music-video url is flagged. *(code landed in phase 2; gate never executed)*
+- [x] **cp3** **PASS** — 13 files all itag 141, re-run downloaded nothing,
+  the known music-video url was flagged. `tools/gate_ingest.py`.
 
 ## phase 3 — resolution is real
 

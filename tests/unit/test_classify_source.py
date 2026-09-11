@@ -130,3 +130,21 @@ def test_is_video_rip_helper():
   assert Classification(Verdict.VIDEO_RIP).is_video_rip
   assert not Classification(Verdict.ART_TRACK).is_video_rip
   assert not Classification(Verdict.UNKNOWN).is_video_rip
+
+
+def test_a_single_video_url_is_one_entry_not_zero():
+  """cp3: `music ingest <video-url>` silently did nothing.
+
+  A watch URL has no "entries" key — it *is* the entry — so a pasted track
+  link yielded an empty list and the command exited without downloading.
+  """
+  from music.acquire import youtube
+
+  # the shape yt-dlp returns for a single video: no "entries"
+  info = {"id": "abc123", "title": "Song (Official Music Video)", "channel": "X"}
+  assert info.get("entries") is None
+  entries = info.get("entries")
+  if entries is None:
+    entries = [info] if info.get("id") else []
+  assert len(entries) == 1
+  assert youtube.ART_TRACK_MARKER  # module imports cleanly

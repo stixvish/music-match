@@ -105,7 +105,12 @@ def enumerate_playlist(url: str, cfg: YouTubeConfig) -> list[VideoRef]:
   opts = _base_opts(cfg) | {"extract_flat": "in_playlist", "skip_download": True}
   with yt_dlp.YoutubeDL(opts) as ydl:
     info = ydl.extract_info(url, download=False)
-  entries = (info or {}).get("entries") or []
+  info = info or {}
+  # a single video url has no "entries" — it *is* the entry. without this a
+  # pasted track link silently yields nothing (cp3).
+  entries = info.get("entries")
+  if entries is None:
+    entries = [info] if info.get("id") else []
   refs = []
   for entry in entries:
     if not entry or not entry.get("id"):
