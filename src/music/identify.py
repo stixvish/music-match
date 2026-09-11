@@ -43,6 +43,41 @@ class Evidence(StrEnum):
   NONE = "none"
 
 
+def distinct_rival_gap(
+  candidates: list[tuple[str, float | None, int]],
+  tolerance_s: float = DURATION_TOLERANCE_S,
+) -> int:
+  """Score gap between the top candidate and the best *genuinely different* one.
+
+  A search for one song routinely returns several results all scoring 100 —
+  the same recording catalogued on an album, a single and a compilation. That
+  is not ambiguity about which song this is, and treating it as such rejects
+  perfect matches. Only a candidate with a different title, or a materially
+  different length, counts as a rival.
+
+  Args:
+    candidates: (title, length_seconds, score) ordered best-first.
+    tolerance_s: Length difference that makes a candidate genuinely different.
+
+  Returns:
+    The score gap, or a large number when there is no distinct rival.
+  """
+  if not candidates:
+    return 99
+  top_title, top_length, top_score = candidates[0]
+  for title, length, score in candidates[1:]:
+    same_title = normalised_equal(title, top_title)
+    same_length = (
+      top_length is not None
+      and length is not None
+      and abs(length - top_length) <= tolerance_s
+    )
+    if same_title and same_length:
+      continue  # same recording, different release
+    return top_score - score
+  return 99
+
+
 @dataclass(frozen=True)
 class Match:
   """Everything the scorer needs. Pure data — no i/o, no network."""

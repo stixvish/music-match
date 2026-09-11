@@ -7,6 +7,7 @@ from music.identify import (
   Evidence,
   Match,
   confidence,
+  distinct_rival_gap,
   normalised_equal,
   review_reason,
   should_auto_accept,
@@ -93,3 +94,39 @@ def test_review_reason():
 )
 def test_normalised_equal(a, b, same):
   assert normalised_equal(a, b) is same
+
+
+# --- distinct rival gap ----------------------------------------------------
+
+
+def test_same_song_on_another_release_is_not_a_rival():
+  """The same recording on another release must not count as a rival.
+
+  Regression: perfect matches scored 0.50 because another release of the same
+  recording also scored 100 — 47 of 64 cp2 failures.
+  """
+  gap = distinct_rival_gap(
+    [("One More Time", 320.0, 100), ("One More Time", 320.5, 100)]
+  )
+  assert gap == 99
+
+
+def test_different_title_is_a_rival():
+  assert distinct_rival_gap([("Song", 200.0, 100), ("Other Song", 200.0, 100)]) == 0
+
+
+def test_same_title_different_length_is_a_rival():
+  """Album version vs radio edit: genuinely ambiguous."""
+  assert distinct_rival_gap([("Song", 200.0, 100), ("Song", 160.0, 98)]) == 2
+
+
+def test_single_candidate_has_no_rival():
+  assert distinct_rival_gap([("Song", 200.0, 100)]) == 99
+
+
+def test_empty_candidates():
+  assert distinct_rival_gap([]) == 99
+
+
+def test_unknown_lengths_count_as_rivals():
+  assert distinct_rival_gap([("Song", None, 100), ("Song", None, 95)]) == 5
