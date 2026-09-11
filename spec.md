@@ -546,12 +546,221 @@ correction surface. Anything the pipeline can decide, it decides.
 1. **M0** — format probe. ✅ **Done.** AIFF selected; frame map confirmed.
 2. **M1** — schema (§11) + resumable stage runner.
 3. **M2** — download stage: enumerate, pre-download dedup, quality gate.
+   *M2a* — Essentia classification. No dependencies, so it lands early:
+   genre-family routing must be sanity-checked on the ~105 Bollywood tracks
+   **before** arbitration is built on top of it (§7).
 4. **M3** — normalisation (§6.5) + resolution + confidence (§12).
    *Normalisation lands first; it is worth more than any source.*
-5. **M4** — Essentia classification + arbitration.
+5. **M4** — arbitration (classification lands in M2a).
 6. **M5** — web ui (§15): review queue, metadata editor, url override, audio
    preview, provenance.
 7. **M6** — elicitation mode → `precedence` table.
 8. **M7** — transcode + tag + publish (§14).
 9. **M8** — full run over the playlists.
 10. **M9** — `music add` for the 7 Beatport WAVs and the SoundCloud track.
+
+## 17. project structure
+
+```
+music/
+  spec.md  claude.md  pyproject.toml  .editorconfig  lefthook.yml
+  .github/workflows/
+    checks.yml            lint · format · types · tests · secrets · spec
+    nightly.yml           live checks (essentia, source adapters)
+  src/music/
+    cli.py                command surface (§18)
+    db/                   THE single database module (§13)
+      schema.sql  migrate.py  runner.py     runner = resumable stages
+    normalise.py          pure. +31pp. no dependencies
+    classify.py           essentia → genre family
+    acquire/
+      youtube.py  local.py  quality.py
+    sources/
+      base.py             adapter protocol + pydantic models
+      musicbrainz.py  discogs.py  spotify.py  itunes.py  beatport.py
+      cache.py  ratelimit.py
+    identify.py           confidence scoring (§12); pure core, thin i/o
+    arbitrate.py          pure. precedence[family][field]
+    publish/
+      transcode.py  tag.py  naming.py  layout.py
+    web/
+      app.py  static/
+  tests/
+    unit/  integration/  cassettes/  conftest.py
+  tools/
+    check_spec.py         cross-reference validator (used by checks.yml)
+```
+
+**The organising rule** (from §19): modules that cannot run in CI must contain
+no logic worth testing. `sources/` is a thin fetch layer plus a pure parser;
+`identify.py` is a pure scorer with a thin lookup around it. Decisions live in
+pure functions; i/o stays dumb.
+
+`src/music/db/` is the only module that touches SQLite, so adding a `user_id`
+later is a single-module migration (§13).
+
+## 18. commands
+
+```
+music ingest <playlist-url>      download + run the full pipeline
+music add <path>...              local files (beatport wavs, soundcloud)
+music add --url <link>           authoritative identity from spotify/mb/discogs
+music resolve [--redo]           re-run resolution over existing tracks
+music retag [--all | --id N]     re-emit tags from the database
+music status                     counts by stage and status
+music serve                      web ui (§15); `music review` aliases it
+music db migrate
+music doctor                     preflight: ffmpeg, yt-dlp, cookies, models
+```
+
+`retag` and `resolve --redo` are the payoff for database-as-source-of-truth: a
+better resolver re-tags the library without re-downloading anything. Neither
+ever overwrites a manual edit (§15).
+
+`doctor` exists because most failures in this project are environmental —
+expired cookies silently dropping to 130 kbps, a missing model, an ffmpeg
+without the right codec. It verifies each and reports, before a long run does.
+
+## 19. testing strategy
+
+**Most of this pipeline cannot run in CI**, and that is a design constraint, not
+an inconvenience:
+
+| Stage | Why not |
+|---|---|
+| `acquire` | needs Premium cookies — account-scoped secrets, never in CI |
+| `sources` | rate-limited, keyed, flaky |
+| `classify` | ~120 MB of wheels + tensorflow + real audio |
+| full runs | 79 GB of output |
+
+The modules that *can* be tested in CI are exactly the ones where being wrong is
+most expensive — `normalise`, confidence scoring, arbitration, naming. Hence the
+rule in §17: push decisions into pure functions, keep i/o thin.
+
+| Tier | Covers | Speed | In CI |
+|---|---|---|---|
+| unit | pure fns: normalise, confidence, arbitrate, naming | ms | ✅ |
+| integration | db + stage runner; transcode/tag round-trip | seconds | ✅ |
+| cassette | source adapters replayed against recorded responses | ms | ✅ |
+| live | real yt-dlp, real apis, real essentia | minutes | ❌ `-m live` |
+
+**Golden-file tests for `normalise`.** A table of `(raw artist, raw title) →
+(clean, clean)`, seeded from real failures already observed: `LMFAOVEVO`,
+`Calvin Harris - I Need Your Love (Official Video)`, `Burnie, Phoenix Ho`. A
+regression here would not crash anything — it would quietly cost accuracy. Golden
+files make it loud.
+
+**Cassettes, not mocks, for sources.** Record each api's real response once,
+commit the json, replay forever. A mock encodes what we *think* MusicBrainz
+returns; a cassette encodes what it *did*.
+
+**Tagging round-trip.** ffmpeg synthesizes the test audio — no binaries are
+committed:
+
+```bash
+ffmpeg -f lavfi -i "sine=frequency=440:duration=2" -c:a aac -b:a 256k   # 56 KB
+```
+
+Transcode it, write all 18 ID3v2.4 frames, read back, assert every frame
+survived. This catches the `TDRC`-silently-dropped class of bug, which has
+already happened once (§10).
+
+**Coverage.** 90% on the pure modules (`normalise`, `identify` scoring,
+`arbitrate`, `naming`) — hard-fail. No target elsewhere: coverage over i/o glue
+measures how much was mocked, not how correct it is. Source adapters are held to
+a contract test each instead.
+
+## 20. tooling and checks
+
+| Tool | Role |
+|---|---|
+| **uv** | dependencies and venv |
+| **ruff** | lint **and** format — replaces black, flake8, isort, pyupgrade |
+| **mypy** | static types; strict on pure modules |
+| **pydantic** | runtime validation at api boundaries |
+| **pytest** | tests; `live` and `slow` markers |
+| **lefthook** | git hooks |
+
+**mypy and pydantic are not alternatives.** mypy reads code without running it
+and cannot see data arriving from the network; pydantic validates that data at
+runtime. Every source adapter returns a pydantic model, so an api that changes
+shape fails loudly at the boundary instead of writing `None` into the library
+three stages later.
+
+**lefthook over pre-commit.** pre-commit's main value is managing isolated tool
+environments — redundant here, since `uv` already pins every tool. lefthook just
+runs `uv run ruff check` in parallel.
+
+### style
+
+**Google Python Style Guide, with 2-space indentation** (a deliberate deviation
+— Google specifies 4). Verified: ruff's formatter honours `indent-width = 2`,
+and `pydocstyle convention = "google"` is active. Note the convention enforces
+that docstrings exist and that recognised sections are well-formed; it will not
+reject a numpy-style docstring, so that stays a review matter.
+
+Line length 88. Lowercase filenames, headings and prose (`claude.md`).
+`.editorconfig` covers markdown, yaml and toml, which ruff does not.
+
+### ci
+
+Split by **trigger**, not by job type:
+
+```
+checks.yml   on: [push, pull_request]
+  lint      ruff check + ruff format --check
+  types     mypy
+  test      pytest -m "not live" + coverage gate
+  secrets   gitleaks
+  spec      tools/check_spec.py
+
+nightly.yml  on: schedule
+  live      essentia + model download + source adapters against real apis
+```
+
+Five jobs sharing one trigger belong in one file; splitting them means five
+copies of the bootstrap and five badges for a single gate. `nightly.yml` is
+separate because its trigger genuinely differs.
+
+**`secrets`** is not boilerplate: this repo is public and the entire cookie
+design rests on no credential ever landing in it (§13). That deserves
+enforcement, not a convention.
+
+**`spec`** validates that every `§n` reference resolves and no known-stale claim
+survives. Dangling references have shipped twice and a mangled heading once.
+
+**`nightly/live`** catches an essentia break or a source-api change before a
+multi-hour run does.
+
+## 21. boundaries
+
+### always
+
+- **Measure before asserting.** Every claim in §4 cites its evidence. If it
+  cannot be cited, mark it *projected*. Two decisions in this project were
+  already reversed by measurement — FLAC as target format, and Opus lowpass.
+- Tag **before** importing to Rekordbox; it caches per path (§10).
+- Hard-fail below 256 kbps rather than silently accept a downgrade.
+- Write both `TDRC` and `TDRL` — Rekordbox shows them in different columns.
+- Preserve the mix/remix designation. Losing it is worse than no tag.
+- Keep all database access inside `src/music/db/`.
+
+### ask first
+
+- Deleting or overwriting audio files.
+- Rewriting git history.
+- Changing the target format or the §10 frame map — it is measured, so changing
+  it requires a new probe, not an opinion.
+- Lowering any threshold: confidence, coverage, bitrate.
+- Adding a source that is paid, gated, or against a provider's terms.
+
+### never
+
+- Commit cookies, tokens, or any credential. No exceptions, no `.gitignore`
+  reliance.
+- Send a user's cookies to a server (§13).
+- Re-encode lossy → lossy.
+- Overwrite a manual edit with resolver output (§15).
+- Publish a track below the confidence threshold — unresolved tracks stay out of
+  the library (§12).
+- Add Claude as a commit co-author (`claude.md`).
