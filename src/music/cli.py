@@ -31,7 +31,7 @@ from music.sources.base import FieldCandidate, Identity
 from music.sources.musicbrainz import MusicBrainz
 
 if TYPE_CHECKING:  # the classify group is optional and heavy
-  from music.classify import Classifier
+  from music.classify import Classifier, Prediction
 
 log = logging.getLogger("music")
 
@@ -46,7 +46,7 @@ def _open(cfg: config.Config) -> sqlite3.Connection:
   return conn
 
 
-def _classified_genre(path: Path) -> str:
+def _classified_genre(path: Path) -> Prediction | None:
   """Top-level genre from the local classifier, for precedence routing.
 
   Returns an empty string when Essentia is not installed — the optional
@@ -57,7 +57,7 @@ def _classified_genre(path: Path) -> str:
     path: Audio file.
 
   Returns:
-    A Discogs top-level genre, or "" when unavailable.
+    The top prediction, or None when Essentia is unavailable.
   """
   global _CLASSIFIER
   try:
@@ -77,8 +77,8 @@ def _classified_genre(path: Path) -> str:
         exc,
       )
       _CLASSIFY_WARNED = True
-    return ""
-  return predictions[0].genre if predictions else ""
+    return None
+  return predictions[0] if predictions else None
 
 
 def _resolve_and_arbitrate(
@@ -162,7 +162,22 @@ def _resolve_and_arbitrate(
   # field — that holds a Discogs *style* ("Dance-pop", "Hip-House") which is
   # not in the family map and silently routed everything to `other`.
   by_field = {c.field: c.value for c in candidates}
-  family = family_for_identity(_classified_genre(item.path), by_field.get("isrc"))
+  prediction = _classified_genre(item.path)
+  family = family_for_identity(
+    prediction.genre if prediction else "", by_field.get("isrc")
+  )
+  # essentia is the last-resort genre source (SPEC.md §7): it ranks below
+  # every real source, but it describes *this audio* rather than whichever
+  # release a catalogue happened to match.
+  if prediction and prediction.style:
+    candidates.append(
+      FieldCandidate(
+        field="genre",
+        value=prediction.style,
+        source="essentia",
+        confidence=float(prediction.activation),
+      )
+    )
   conn.execute("UPDATE track SET genre_family=? WHERE id=?", (family, track_id))
   persist(conn, track_id, arbitrate(candidates, family=family))
   return True

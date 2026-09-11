@@ -208,6 +208,37 @@ Bollywood tracks — AcoustID carries it where text search is weak — and **17 
 | BPM | local (Essentia). **Rekordbox overwrites `TBPM` with its own analysis; only Serato honours the tag** (§10) |
 | key | local (Essentia). Honoured by *both* apps, and Serato DJ Lite cannot detect key at all — so `TKEY` is load-bearing |
 
+### compilations must not supply album fields
+
+Measured in cp6, on real output:
+
+```
+Club Can't Handle Me  ->  "NRJ Hits 2011"                     (Various Artists)
+Fireball              ->  "Mastermix Classic Cuts, Vol. 165"  (Music Factory)
+```
+
+Both won on precedence while Spotify and iTunes held the actual albums. A
+compilation is **a place the track appears, not the album it belongs to**.
+
+Two signals, the second far more general:
+
+1. an explicit various-artists credit
+2. **an album artist that is not the track artist.** DJ-service compilations
+   like Mastermix never say "Various Artists" — they are credited to the
+   service. If the track is by Pitbull, the album it belongs to is credited to
+   Pitbull. A wider credit still matches: `David Guetta` against
+   `David Guetta & Akon` is the same album.
+
+A compilation is used only when no other source offers album fields at all.
+
+**`Not On Label` is not a label.** Discogs writes it for self-released and
+white-label pressings; it is accurate and useless, and is dropped along with
+`Self-Released` and `None`.
+
+**Typographic quotes are normalised to ASCII.** MusicBrainz returns
+`Club Can’t Handle Me`, which never matches a DJ-software search for
+`Can't`.
+
 ### release selection
 
 Album fields are **resolved as a group, from one chosen release** — never

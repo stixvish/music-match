@@ -38,6 +38,33 @@ _ARTIST_SPLIT = re.compile(r"\s*(?:;|&|,| x |\bvs\.?\b|\band\b)\s*", re.IGNORECA
 _SPACES = re.compile(r"\s+")
 
 
+_TYPOGRAPHIC = str.maketrans(
+  {
+    "\u2019": "'",
+    "\u2018": "'",
+    "\u201c": '"',
+    "\u201d": '"',
+    "\u2013": "-",
+    "\u2014": "-",
+  }
+)
+
+
+def asciify_quotes(raw: str) -> str:
+  """Replace typographic quotes and dashes with ASCII equivalents.
+
+  MusicBrainz uses typographic quotes, so "Club Can\u2019t Handle Me" never
+  matches a DJ-software search for "Can't".
+
+  Args:
+    raw: Any text.
+
+  Returns:
+    The text with curly quotes and en/em dashes normalised.
+  """
+  return (raw or "").translate(_TYPOGRAPHIC)
+
+
 def canonical_title(raw: str) -> str:
   """Rewrite a title into house style.
 
@@ -47,7 +74,7 @@ def canonical_title(raw: str) -> str:
   Returns:
     The title with `ft.` parenthesised and any mix name bracketed.
   """
-  text = _SPACES.sub(" ", (raw or "").strip())
+  text = _SPACES.sub(" ", asciify_quotes(raw).strip())
   if not text:
     return ""
 
@@ -94,7 +121,7 @@ def safe_component(raw: str) -> str:
   Returns:
     A non-empty, filesystem-safe component.
   """
-  text = unicodedata.normalize("NFC", (raw or "").strip())
+  text = unicodedata.normalize("NFC", asciify_quotes(raw).strip())
   text = _ILLEGAL.sub("-", text)
   text = _SPACES.sub(" ", text).strip()
   # trailing dots are legitimate in artist names ("Fred again..") and must

@@ -179,3 +179,10 @@ def test_mix_name_and_remixer_are_different_fields():
 
 def test_featured_clause_is_not_a_version():
   assert naming.extract_version("Mood (ft. iann dior)").mix_name == ""
+
+
+def test_typographic_quotes_are_asciified():
+  """MusicBrainz uses curly quotes; a search for "Can't" must match."""
+  assert naming.canonical_title("Club Can’t Handle Me") == "Club Can't Handle Me"
+  assert naming.safe_component("Flo’s Track") == "Flo's Track"
+  assert naming.asciify_quotes("“quoted” – dash") == '"quoted" - dash'

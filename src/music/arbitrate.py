@@ -26,6 +26,15 @@ from music.sources.base import ALBUM_GROUP, FieldCandidate
 # "2013-03-16". Taking the first-ranked source loses the precise date.
 DATE_FIELDS = ("release_date", "year")
 
+# album credits that mean "this is a compilation", not an album by the artist
+COMPILATION_CREDITS = frozenset(
+  {"various artists", "various", "va", "verschiedene interpreten", "diverse"}
+)
+
+# discogs writes this for self-released and white-label pressings. it is
+# accurate and useless; it is not a label name.
+NON_LABELS = frozenset({"not on label", "self-released", "none", "unknown"})
+
 # default ranking per field, before elicitation calibrates it (SPEC.md §9).
 _BASE: dict[str, tuple[str, ...]] = {
   "title": ("musicbrainz", "spotify", "itunes", "discogs"),
@@ -123,10 +132,56 @@ def load_precedence(
   return tuple(r["source"] for r in rows) or precedence_for(family, field)
 
 
+def _norm(text: str) -> str:
+  return "".join(ch for ch in (text or "").casefold() if ch.isalnum())
+
+
+def _is_compilation(
+  candidates: Sequence[FieldCandidate], source: str, artist: str = ""
+) -> bool:
+  """Whether a source's album looks like a compilation rather than the album.
+
+  Two signals, the second much more general than the first:
+
+  1. an explicit various-artists credit
+  2. **an album artist that is not the track artist.** "Fireball" resolved to
+     "Mastermix Classic Cuts, Volume 165" credited to "Music Factory" — a DJ
+     service compilation that never says "Various Artists". If the track is by
+     Pitbull, the album it belongs to is credited to Pitbull.
+
+  Args:
+    candidates: All candidates for a track.
+    source: Source name to check.
+    artist: The track's artist, for signal 2.
+
+  Returns:
+    True if that source's album looks like a compilation.
+  """
+  credit = next(
+    (c.value for c in candidates if c.source == source and c.field == "album_artist"),
+    "",
+  )
+  if not credit:
+    return False
+  if credit.strip().casefold() in COMPILATION_CREDITS:
+    return True
+  if not artist:
+    return False
+  left, right = _norm(credit), _norm(artist)
+  # a substring match covers "David Guetta" vs "David Guetta & Akon"
+  return not (left == right or left.startswith(right) or right.startswith(left))
+
+
 def _best_album_source(
   candidates: Sequence[FieldCandidate], ranked: Iterable[str]
 ) -> str | None:
   """Pick one source to supply every album field.
+
+  A source whose album credit is "Various Artists" is skipped while any other
+  source offers album fields. Measured need: MusicBrainz won on precedence and
+  returned "NRJ Hits 2011" and "Dog Days of Summer ... Sampler" while Spotify
+  and iTunes had the actual albums. A compilation is a place the track appears,
+  not the album it belongs to.
 
   Args:
     candidates: All candidates for a track.
@@ -139,10 +194,16 @@ def _best_album_source(
   for candidate in candidates:
     if candidate.field in ALBUM_GROUP and candidate.value:
       offered.setdefault(candidate.source, set()).add(candidate.field)
+  if not offered:
+    return None
+
+  artist = next((c.value for c in candidates if c.field == "artist" and c.value), "")
+  real = [s for s in offered if not _is_compilation(candidates, s, artist)]
+  pool = real or list(offered)
   for source in ranked:
-    if source in offered:
+    if source in pool:
       return source
-  return next(iter(offered), None)
+  return pool[0]
 
 
 def arbitrate(
@@ -181,6 +242,10 @@ def arbitrate(
   for field, options in sorted(by_field.items()):
     if field in ALBUM_GROUP:
       continue
+    if field == "label":
+      options = [c for c in options if not _is_non_label(c.value)]
+      if not options:
+        continue
     if field in DATE_FIELDS:
       chosen = _earliest(options)
       decisions.append(Decision(field, chosen.value, chosen.source))
@@ -197,6 +262,22 @@ def arbitrate(
     decisions.append(Decision(field, spare.value, spare.source, decided_by="fallback"))
 
   return sorted(decisions, key=lambda d: d.field)
+
+
+def _is_non_label(value: str) -> bool:
+  """Whether a label value is a placeholder rather than a label.
+
+  Discogs writes "Not On Label (Pitbull)" for self-released pressings.
+
+  Args:
+    value: A candidate label.
+
+  Returns:
+    True if the value is a placeholder.
+  """
+  text = value.strip().casefold()
+  base = text.split("(")[0].strip()
+  return base in NON_LABELS or not base
 
 
 def _earliest(options: Sequence[FieldCandidate]) -> FieldCandidate:

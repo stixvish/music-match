@@ -220,3 +220,129 @@ def test_a_ranked_source_is_recorded_as_precedence():
   decisions = arbitrate([cand("genre", "House", "discogs")], family="electronic")
   decision = next(d for d in decisions if d.field == "genre")
   assert decision.decided_by == "precedence"
+
+
+# --- compilations must not supply album fields (cp6) -----------------------
+
+
+def test_a_compilation_does_not_supply_album_fields():
+  """A various-artists release must not supply album fields.
+
+  cp6: MusicBrainz won on precedence and returned "NRJ Hits 2011" while Spotify
+  had the real album. A compilation is a place the track appears, not the album
+  it belongs to.
+  """
+  got = resolved(
+    arbitrate(
+      [
+        cand("album", "NRJ Hits 2011", "musicbrainz"),
+        cand("album_artist", "Various Artists", "musicbrainz"),
+        cand("track_number", "15", "musicbrainz"),
+        cand("album", "Only One Flo (Part 1)", "spotify"),
+        cand("album_artist", "Flo Rida", "spotify"),
+        cand("track_number", "3", "spotify"),
+      ],
+      family="pop",
+    )
+  )
+  assert got["album"] == ("Only One Flo (Part 1)", "spotify")
+  assert got["track_number"] == ("3", "spotify")
+
+
+def test_a_compilation_is_used_when_nothing_else_offers_an_album():
+  got = resolved(
+    arbitrate(
+      [
+        cand("album", "NRJ Hits 2011", "musicbrainz"),
+        cand("album_artist", "Various Artists", "musicbrainz"),
+      ],
+      family="pop",
+    )
+  )
+  assert got["album"] == ("NRJ Hits 2011", "musicbrainz")
+
+
+@pytest.mark.parametrize("credit", ["Various Artists", "various", "VA", "Diverse"])
+def test_compilation_credits_are_recognised(credit):
+  got = resolved(
+    arbitrate(
+      [
+        cand("album", "Comp", "musicbrainz"),
+        cand("album_artist", credit, "musicbrainz"),
+        cand("album", "Real Album", "spotify"),
+        cand("album_artist", "The Artist", "spotify"),
+      ],
+      family="pop",
+    )
+  )
+  assert got["album"] == ("Real Album", "spotify")
+
+
+# --- placeholder labels are rejected ---------------------------------------
+
+
+@pytest.mark.parametrize(
+  "value",
+  ["Not On Label", "Not On Label (Pitbull)", "Self-Released", "none", "  "],
+)
+def test_placeholder_labels_are_dropped(value):
+  """Discogs writes "Not On Label (Pitbull)" for self-released pressings."""
+  assert "label" not in resolved(arbitrate([cand("label", value, "discogs")]))
+
+
+def test_a_real_label_survives():
+  got = resolved(arbitrate([cand("label", "T-Series", "discogs")]))
+  assert got["label"] == ("T-Series", "discogs")
+
+
+def test_a_real_label_beats_a_placeholder():
+  got = resolved(
+    arbitrate(
+      [
+        cand("label", "Not On Label (X)", "discogs"),
+        cand("label", "Polo Grounds Music", "musicbrainz"),
+      ],
+      family="pop",
+    )
+  )
+  assert got["label"] == ("Polo Grounds Music", "musicbrainz")
+
+
+def test_an_album_credited_to_someone_else_is_a_compilation():
+  """An album credited to someone other than the artist is a compilation.
+
+  cp6: "Fireball" resolved to a Mastermix DJ compilation credited to "Music
+  Factory", which never says "Various Artists".
+  """
+  got = resolved(
+    arbitrate(
+      [
+        cand("artist", "Pitbull", "musicbrainz"),
+        cand("album", "Mastermix Classic Cuts, Volume 165", "musicbrainz"),
+        cand("album_artist", "Music Factory", "musicbrainz"),
+        cand("artist", "Pitbull", "spotify"),
+        cand("album", "Global Warming", "spotify"),
+        cand("album_artist", "Pitbull", "spotify"),
+      ],
+      family="pop",
+    )
+  )
+  assert got["album"] == ("Global Warming", "spotify")
+
+
+def test_a_wider_album_credit_is_not_a_compilation():
+  """A wider album credit is not a compilation.
+
+  "David Guetta" vs "David Guetta & Akon" is the same album.
+  """
+  got = resolved(
+    arbitrate(
+      [
+        cand("artist", "David Guetta", "musicbrainz"),
+        cand("album", "One Love", "musicbrainz"),
+        cand("album_artist", "David Guetta & Akon", "musicbrainz"),
+      ],
+      family="pop",
+    )
+  )
+  assert got["album"] == ("One Love", "musicbrainz")
