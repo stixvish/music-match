@@ -232,6 +232,12 @@ Discogs Style. That is only true of the file tags. The v4 API exposes a
 **separate sub-genre resource** (`/v4/catalog/genres/{id}/sub-genres`), so the
 fine taxonomy exists; purchased-file tags simply carry the top-level genre.
 
+**DJ-specific versions.** Beatport catalogues extended mixes, club mixes and
+DJ edits as first-class releases, for tracks that have no such version anywhere
+else. These are precisely the cuts a DJ plays and precisely what `mix_name` and
+`remixer` are for (§14) — so Beatport is not just a better genre source, it is
+often the *only* source that knows the version in hand exists.
+
 **Coverage of recent digital-only electronic releases**, where Discogs is a
 physical-media-first database and has nothing:
 
