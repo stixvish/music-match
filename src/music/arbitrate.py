@@ -14,6 +14,7 @@ Two rules stop individually-defensible answers from being collectively wrong:
   be safe (SPEC.md §15).
 """
 
+import re
 import sqlite3
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
@@ -34,6 +35,31 @@ COMPILATION_CREDITS = frozenset(
 # discogs writes this for self-released and white-label pressings. it is
 # accurate and useless; it is not a label name.
 NON_LABELS = frozenset({"not on label", "self-released", "none", "unknown"})
+
+# edition markers, matched against an album title (SPEC.md §7)
+DELUXE_WORDS = ("deluxe", "expanded", "special", "anniversary", "complete", "extended")
+_EDITION_SUFFIX = re.compile(
+  r"\s*[\(\[][^)\]]*\b(?:"
+  + "|".join(DELUXE_WORDS)
+  + r"|version|edition)\b[^)\]]*[\)\]]\s*$",
+  re.IGNORECASE,
+)
+
+
+def _album_key(title: str) -> str:
+  """Group editions of one album together.
+
+  "Planet Pit" and "Planet Pit (Deluxe Version)" are the same release.
+
+  Args:
+    title: An album title.
+
+  Returns:
+    A normalised grouping key.
+  """
+  base = _EDITION_SUFFIX.sub("", title or "")
+  return "".join(ch for ch in base.casefold() if ch.isalnum())
+
 
 # default ranking per field, before elicitation calibrates it (SPEC.md §9).
 _BASE: dict[str, tuple[str, ...]] = {
@@ -200,10 +226,38 @@ def _best_album_source(
   artist = next((c.value for c in candidates if c.field == "artist" and c.value), "")
   real = [s for s in offered if not _is_compilation(candidates, s, artist)]
   pool = real or list(offered)
-  for source in ranked:
-    if source in pool:
-      return source
-  return pool[0]
+  albums = {
+    c.source: c.value
+    for c in candidates
+    if c.field == "album" and c.value and c.source in pool
+  }
+  if not albums:
+    return next((s for s in ranked if s in pool), pool[0])
+
+  # group editions of one album together: "Planet Pit" and "Planet Pit
+  # (Deluxe Version)" are one release, not two competing candidates.
+  groups: dict[str, list[str]] = {}
+  for source, album in albums.items():
+    groups.setdefault(_album_key(album), []).append(source)
+
+  order = list(ranked)
+
+  def group_rank(item: tuple[str, list[str]]) -> tuple[int, int]:
+    _, sources = item
+    # agreement first: two sources naming the same album outweigh one ranked
+    # higher. "Hey Baby" took musicbrainz's "Global Warming" while itunes and
+    # spotify both said "Planet Pit (Deluxe Version)" — and were right.
+    best = min((order.index(s) for s in sources if s in order), default=len(order))
+    return (-len(sources), best)
+
+  winning = min(groups.items(), key=group_rank)[1]
+
+  # within the winning album, prefer the largest edition (SPEC.md §7)
+  def edition_rank(source: str) -> tuple[int, int]:
+    deluxe = any(w in albums[source].casefold() for w in DELUXE_WORDS)
+    return (-int(deluxe), order.index(source) if source in order else len(order))
+
+  return min(winning, key=edition_rank)
 
 
 def arbitrate(

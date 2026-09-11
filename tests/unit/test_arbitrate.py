@@ -346,3 +346,85 @@ def test_a_wider_album_credit_is_not_a_compilation():
     )
   )
   assert got["album"] == ("One Love", "musicbrainz")
+
+
+# --- deluxe editions and cross-source agreement (cp6) ----------------------
+
+
+def test_deluxe_edition_is_preferred_over_the_standard():
+  got = resolved(
+    arbitrate(
+      [
+        cand("artist", "David Guetta", "musicbrainz"),
+        cand("album", "One Love", "musicbrainz"),
+        cand("album_artist", "David Guetta", "musicbrainz"),
+        cand("artist", "David Guetta", "spotify"),
+        cand("album", "One Love (Deluxe)", "spotify"),
+        cand("album_artist", "David Guetta", "spotify"),
+      ],
+      family="pop",
+    )
+  )
+  assert got["album"] == ("One Love (Deluxe)", "spotify")
+
+
+def test_two_sources_agreeing_beat_one_ranked_higher():
+  """Agreement between sources outweighs a higher-ranked lone source.
+
+  cp6: "Hey Baby" took musicbrainz's "Global Warming" while itunes and spotify
+  both said "Planet Pit (Deluxe Version)" — and were right.
+  """
+  got = resolved(
+    arbitrate(
+      [
+        cand("artist", "Pitbull", "musicbrainz"),
+        cand("album", "Global Warming", "musicbrainz"),
+        cand("album_artist", "Pitbull", "musicbrainz"),
+        cand("artist", "Pitbull", "spotify"),
+        cand("album", "Planet Pit (Deluxe Version)", "spotify"),
+        cand("album_artist", "Pitbull", "spotify"),
+        cand("artist", "Pitbull", "itunes"),
+        cand("album", "Planet Pit (Deluxe Version)", "itunes"),
+        cand("album_artist", "Pitbull", "itunes"),
+      ],
+      family="pop",
+    )
+  )
+  assert got["album"][0] == "Planet Pit (Deluxe Version)"
+
+
+def test_unanimous_agreement_keeps_the_ranked_source():
+  got = resolved(
+    arbitrate(
+      [cand("artist", "Pitbull", s) for s in ("musicbrainz", "spotify", "itunes")]
+      + [
+        cand("album", "Globalization", s) for s in ("musicbrainz", "spotify", "itunes")
+      ]
+      + [
+        cand("album_artist", "Pitbull", s) for s in ("musicbrainz", "spotify", "itunes")
+      ],
+      family="pop",
+    )
+  )
+  assert got["album"] == ("Globalization", "musicbrainz")
+
+
+@pytest.mark.parametrize(
+  ("a", "b"),
+  [
+    ("Planet Pit", "Planet Pit (Deluxe Version)"),
+    ("One Love", "One Love (Deluxe)"),
+    ("Album", "Album [Expanded Edition]"),
+    ("Album", "Album (10th Anniversary Edition)"),
+  ],
+)
+def test_editions_group_together(a, b):
+  from music.arbitrate import _album_key
+
+  assert _album_key(a) == _album_key(b)
+
+
+def test_different_albums_do_not_group():
+  from music.arbitrate import _album_key
+
+  assert _album_key("Planet Pit") != _album_key("Global Warming")

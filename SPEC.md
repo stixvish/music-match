@@ -231,6 +231,21 @@ Two signals, the second far more general:
 
 A compilation is used only when no other source offers album fields at all.
 
+**Agreement between sources outweighs precedence.** Two sources naming the same
+album beat one ranked higher naming a different one:
+
+```
+Hey Baby   musicbrainz: "Global Warming"                  <- was chosen, and wrong
+           itunes + spotify: "Planet Pit (Deluxe Version)" <- correct
+```
+
+**The deluxe preference applies across sources, not only within MusicBrainz.**
+Editions of one album group together — `Planet Pit` and `Planet Pit (Deluxe
+Version)` are one release — and the largest edition wins inside the group. This
+was specified in §7 from the start but implemented only inside the MusicBrainz
+adapter, so `One Love (Deluxe)` lost to `One Love` even with two sources
+offering it.
+
 **`Not On Label` is not a label.** Discogs writes it for self-released and
 white-label pressings; it is accurate and useless, and is dropped along with
 `Self-Released` and `None`.

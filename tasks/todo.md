@@ -84,7 +84,10 @@
 - [x] **t26** canonical naming (`ft.`, `[remix]`) + genre/artist layout (§14)
 - [x] **t27** `retag` and `resolve --redo`
   - accept: never overwrites `decided_by='manual'`
-- [ ] **cp6** 20 tracks verified in both apps; retag preserves a manual edit
+- [>] **cp6** verified in rekordbox + serato: fields populate correctly.
+  **accuracy defects found and fixed** — compilations winning over albums,
+  `Not On Label`, curly quotes, deluxe editions ignored across sources.
+  outstanding: re-verify in both apps, and the retag-preserves-manual-edit step.
 
 ## phase 6 — web ui
 
