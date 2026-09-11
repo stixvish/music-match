@@ -1,0 +1,31 @@
+# copy to ~/.config/musicpipeline/config.toml and fill in.
+# NEVER commit the real file — it lives outside the repo by design (SPEC.md §13).
+
+[youtube]
+# cookies are read from the browser at runtime; no credential file exists.
+cookie_browser = "chrome"
+format_chain = "141/774/140/251"
+player_client = "web_music"
+min_bitrate_kbps = 256          # hard fail below this
+
+[paths]
+library = "~/Music/library"
+staging = "~/Music/.staging"
+database = "~/.local/share/musicpipeline/music.db"
+
+[sources.musicbrainz]
+# no key. requires a descriptive user-agent or requests are blocked.
+user_agent = "music-match/0.1 ( you@example.com )"
+
+[sources.acoustid]
+api_key = ""                    # https://acoustid.org/new-application
+
+[sources.discogs]
+token = ""                      # https://www.discogs.com/settings/developers
+
+[sources.spotify]
+client_id = ""                  # https://developer.spotify.com/dashboard
+client_secret = ""
+
+# itunes search api needs no credentials.
+# beatport has no public api; deferred to v2 (SPEC.md §3).
