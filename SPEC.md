@@ -751,6 +751,19 @@ later is a mechanical migration. Do not build multi-tenancy now.
 **Dependencies.** `yt-dlp` (needs a JS runtime — Deno — for some formats),
 `ffmpeg`, `essentia-tensorflow` (cp314 wheels), `mutagen`, `chromaprint/fpcalc`.
 
+### starting over
+
+`music reset` deletes the library, the staging directory and the database. The
+database is the source of truth and the audio is a regenerable projection
+(§11) — but a reset also discards every manual edit and every calibration
+answer, and those are **not** regenerable from anything. It therefore requires
+typing `delete <n>` where `n` is the exact file count, prints what it is about
+to destroy first, and reports how many manual edits and answers are at stake.
+`--keep-staging` keeps the downloaded audio so a rebuild needs no re-download.
+
+Rekordbox and Serato hold their own databases pointing at these paths; after a
+reset their libraries reference files that no longer exist.
+
 ## 14. output layout
 
 ```
@@ -865,6 +878,25 @@ any time — not just on the ones the pipeline doubted.
   reminder whenever a published file is edited.
 - **Bulk operations.** Multi-select for the predictable batch fixes — a whole
   mislabelled genre family, or a run of tracks from one bad playlist.
+- **The pipeline's real output is shown, not summarised.** yt-dlp is given a
+  `logger` and `progress_hooks`, so its own lines — cookie extraction, the
+  `[jsc:deno]` JS challenge, `FixupM4a`, the negotiated itag — appear in a
+  console in the ui. The live download percentage is **not** a log line: with
+  `noprogress` off yt-dlp writes one several times a second and buries every
+  real event, so the percentage is rewritten in place from the hook and the log
+  keeps only discrete events. The log is fetched incrementally by sequence
+  number, so a one-second poll stays cheap.
+- **Counters are per stage, not just per track.** `done` alone cannot
+  distinguish "downloading track 40" from "waiting on MusicBrainz for track
+  40", and at a hundred tracks those feel completely different. The run reports
+  `downloaded`, `analysed`, `resolved`, `published`, `queued`, `skipped` and
+  `failed` separately, and writes `track.stage` so an interrupted run has a
+  resume marker (§13).
+- **Every text input has a keyboard exit.** An input keeps focus until
+  something takes it away, and while it holds focus every navigation key is
+  dead — `j` types a `j` into the title rather than moving down, silently
+  corrupting the field. Enter commits and leaves; Escape reverts and leaves.
+  Without this the documented keyboard flow works exactly once.
 - **Acquisition belongs in the ui.** A YouTube or YouTube Music link is pasted
   into the queue pane and runs on a worker thread, with live progress; one run
   at a time, since two would race on the staging directory and double the

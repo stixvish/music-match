@@ -83,6 +83,9 @@ const api = {
     return r.json();
   },
   async ingestStatus() { return (await fetch('/api/ingest/status')).json(); },
+  async ingestLog(since) {
+    return (await fetch(`/api/ingest/log?since=${since}`)).json();
+  },
   async elicitNext() { return (await fetch('/api/elicit/next')).json(); },
   async elicitChoice(option) {
     return (await fetch('/api/elicit/choice', {
@@ -238,7 +241,7 @@ function renderTrack() {
     }).join('')}
     <p class="label" style="margin-top:1rem">
       <kbd>j</kbd>/<kbd>k</kbd> move · <kbd>space</kbd> play · <kbd>tab</kbd> field ·
-      <kbd>↵</kbd> accept
+      <kbd>↵</kbd> accept · <kbd>esc</kbd> leave a field
     </p>`;
 
   mountPlayer('review', 'track-player', `/api/audio/${t.id}`);
@@ -251,6 +254,18 @@ function renderTrack() {
       await api.setField(t.id, input.dataset.field, input.value);
       state.detail = await api.track(t.id);
       renderTrack();
+    });
+    // an input keeps focus until something takes it away, and while it has
+    // focus every navigation key is dead — `j` types a `j` into the title
+    // rather than moving down. Enter commits and leaves; Escape abandons and
+    // leaves. Without a way out, the keyboard flow works exactly once.
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+      else if (e.key === 'Escape') {
+        e.preventDefault();
+        input.value = resolved[input.dataset.field]?.value ?? '';
+        input.blur();
+      }
     });
   }
   for (const img of document.querySelectorAll('.art-choice')) {
@@ -321,30 +336,97 @@ async function acceptCurrent() {
 // --- acquisition ----------------------------------------------------------
 
 let ingestTimer = 0;
+let logCursor = -1;
+
+const STAGES = [
+  ['downloaded', 'downloaded'],
+  ['analysed', 'analysed'],
+  ['resolved', 'resolved'],
+  ['published', 'published'],
+  ['queued', 'to review'],
+  ['skipped', 'skipped'],
+  ['failed', 'failed'],
+];
+
+function renderCounters(s) {
+  const pct = s.total ? Math.round((100 * s.done) / s.total) : 0;
+  $('counters').innerHTML = `
+    <div class="count-head">
+      <strong>${s.done}/${s.total || '?'}</strong>
+      <span class="label">${esc(s.stage || (s.running ? 'working' : 'idle'))}</span>
+      <span class="count-now">${esc(s.current || '')}</span>
+    </div>
+    <div class="bar"><div class="bar-fill" style="width:${pct}%"></div></div>
+    <div class="counts">
+      ${STAGES.map(([k, label]) => `
+        <div class="count ${s[k] ? 'has' : ''}" data-k="${k}">
+          <span class="n">${s[k] || 0}</span>
+          <span class="label">${label}</span>
+        </div>`).join('')}
+    </div>`;
+}
+
+/** Append new lines and keep the view pinned to the bottom, unless the reader
+ *  has scrolled up — yanking them back down mid-read is the thing that makes a
+ *  log window unusable. */
+async function pumpLog(progressLine) {
+  const box = $('log');
+  const { lines, cursor } = await api.ingestLog(logCursor);
+  const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+
+  if (lines.length) {
+    logCursor = cursor;
+    const frag = document.createDocumentFragment();
+    for (const l of lines) {
+      const el = document.createElement('div');
+      el.className = `ln ${l.level}`;
+      el.textContent = l.text;
+      frag.appendChild(el);
+    }
+    box.querySelector('.ln.live')?.remove();
+    box.appendChild(frag);
+  }
+  // the live percentage is rewritten in place, the way a terminal does it
+  let live = box.querySelector('.ln.live');
+  if (progressLine) {
+    if (!live) {
+      live = document.createElement('div');
+      live.className = 'ln live';
+      box.appendChild(live);
+    }
+    live.textContent = progressLine;
+  } else {
+    live?.remove();
+  }
+  if (atBottom) box.scrollTop = box.scrollHeight;
+}
+
+// the console is a working surface during a run and clutter after it; the
+// preference is remembered so it does not have to be re-collapsed every poll
+let logOpen = true;
+
+function setLogOpen(open) {
+  logOpen = open;
+  $('log').hidden = !open;
+  const btn = $('console-toggle');
+  btn.textContent = open ? 'Hide output' : 'Show output';
+  btn.setAttribute('aria-expanded', String(open));
+}
 
 async function pollIngest() {
   const s = await api.ingestStatus();
-  const box = $('add-status');
-  if (!s.url) { box.innerHTML = ''; return false; }
+  if (!s.url) { $('console').hidden = true; $('add-status').innerHTML = ''; return false; }
 
-  if (s.error) {
-    box.innerHTML = `<p class="add-line bad">${esc(s.error)}</p>`;
-    return false;
-  }
-  const pct = s.total ? Math.round((100 * s.done) / s.total) : 0;
-  const tail = [
-    s.published ? `${s.published} published` : '',
-    s.queued ? `${s.queued} to review` : '',
-    s.skipped ? `${s.skipped} already had` : '',
-    s.failed ? `${s.failed} failed` : '',
-  ].filter(Boolean).join(' · ');
+  $('console').hidden = false;
+  renderCounters(s);
+  if (logOpen) await pumpLog(s.progress_line);
 
-  box.innerHTML = s.running
-    ? `<div class="add-line">
-         <div class="bar"><div class="bar-fill" style="width:${pct}%"></div></div>
-         <span>${s.done}/${s.total} · ${esc(s.current || 'starting…')}</span>
-       </div>`
-    : `<p class="add-line done">Finished — ${esc(tail || 'nothing new')}</p>`;
+  $('add-status').innerHTML = s.error
+    ? `<p class="add-line bad">${esc(s.error)}</p>`
+    : s.running
+      ? `<p class="add-line">${s.done}/${s.total} · ${esc(s.current || 'starting…')}</p>`
+      : `<p class="add-line done">Finished — ${s.published} published,
+           ${s.queued} to review</p>`;
   return Boolean(s.running);
 }
 
@@ -357,8 +439,10 @@ async function watchIngest() {
     if (!running) clearInterval(ingestTimer);
   };
   await tick();
-  ingestTimer = setInterval(tick, 2000);
+  ingestTimer = setInterval(tick, 1000);
 }
+
+$('console-toggle').addEventListener('click', () => setLogOpen(!logOpen));
 
 $('add').addEventListener('submit', async (e) => {
   e.preventDefault();

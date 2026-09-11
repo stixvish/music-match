@@ -36,6 +36,13 @@
       <h1 id="track-title">Nothing selected</h1>
       <span class="label" id="track-meta"></span>
     </header>
+    <!-- the console needs the width; the queue column is 19rem -->
+    <section id="console" hidden>
+      <button id="console-toggle" aria-expanded="true"
+              aria-controls="log">Hide output</button>
+      <div id="counters"></div>
+      <pre id="log" role="log" aria-live="polite" aria-label="Pipeline output"></pre>
+    </section>
     <div id="track"></div>
   </section>
 

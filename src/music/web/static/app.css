@@ -304,3 +304,47 @@ table.cells td { padding: 0.35rem 0.5rem; border-top: 1px solid var(--line); }
 /* the player is moved into this slot rather than recreated (see app.js) */
 .player { margin: 0.5rem 0; }
 .player audio { width: 100%; display: block; }
+
+/* --- pipeline console ---------------------------------------------------- */
+
+#console { margin-bottom: 1rem; }
+
+.count-head { display: flex; align-items: baseline; gap: 0.5rem; margin-bottom: 0.4rem; }
+.count-head strong { font-size: 1.25rem; letter-spacing: -0.019em; font-variant-numeric: tabular-nums; }
+.count-now {
+  font-size: 0.75rem; color: var(--muted); margin-left: auto;
+  max-width: 22rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+.counts { display: flex; flex-wrap: wrap; gap: 0.35rem; margin: 0.6rem 0; }
+/* a zero is context, not news: it stays quiet until the number moves */
+.count {
+  display: flex; align-items: baseline; gap: 0.35rem;
+  padding: 0.25rem 0.6rem; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--surface-solid);
+  opacity: 0.45;
+}
+.count.has { opacity: 1; }
+.count .n { font-size: 0.9375rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+.count[data-k="failed"].has .n { color: var(--warn); }
+.count[data-k="published"].has .n { color: var(--good); }
+
+#log {
+  margin: 0; padding: 0.65rem 0.8rem; max-height: 17rem; overflow-y: auto;
+  border-radius: var(--r-md); border: 1px solid var(--line);
+  background: #0b0b0c; color: #d8d8dc;
+  font-family: "SF Mono", ui-monospace, monospace; font-size: 0.75rem;
+  line-height: 1.55; white-space: pre-wrap; word-break: break-word;
+}
+/* a terminal is dark in both themes — it is a quotation of another program's
+   output, not part of this page's surface */
+.ln { }
+.ln.step { color: #7fd1a0; }
+.ln.warn { color: #e9c46a; }
+.ln.error { color: #f4978e; }
+.ln.live { color: #8ab4f8; }
+
+#console-toggle {
+  float: right; font-size: 0.6875rem; padding: 0.15rem 0.5rem;
+  border-radius: 999px; color: var(--muted);
+}

@@ -53,7 +53,7 @@ class Download:
     return self.channel.endswith(" - Topic") or (ART_TRACK_MARKER in self.description)
 
 
-def _base_opts(cfg: YouTubeConfig) -> dict[str, object]:
+def _base_opts(cfg: YouTubeConfig, sink: object | None = None) -> dict[str, object]:
   """Build yt-dlp options with full CLI parity.
 
   Options are derived from yt-dlp's own argument parser rather than assembled
@@ -73,6 +73,8 @@ def _base_opts(cfg: YouTubeConfig) -> dict[str, object]:
 
   Args:
     cfg: YouTube settings.
+    sink: Optional logger object with yt-dlp's `debug`/`info`/`warning`/
+      `error` methods and an optional `hook` for progress callbacks.
 
   Returns:
     An options dict suitable for `yt_dlp.YoutubeDL`.
@@ -89,20 +91,33 @@ def _base_opts(cfg: YouTubeConfig) -> dict[str, object]:
   )
   opts = dict(parsed.ydl_opts)
   opts.update({"quiet": True, "no_warnings": True, "noprogress": True})
+  if sink is not None:
+    # yt-dlp writes through a logger object rather than stdout when given one,
+    # which is how its real output reaches the web ui instead of a terminal
+    # nobody is watching (SPEC.md §15).
+    opts["logger"] = sink
+    # `noprogress` stays on: with it off, yt-dlp writes a "[download] 12.5%"
+    # line through the logger several times a second and buries every real
+    # event within seconds. The percentage comes from the hook instead, which
+    # rewrites one line in place the way a terminal does.
+    opts["progress_hooks"] = [getattr(sink, "hook", lambda _d: None)]
   return opts
 
 
-def enumerate_playlist(url: str, cfg: YouTubeConfig) -> list[VideoRef]:
+def enumerate_playlist(
+  url: str, cfg: YouTubeConfig, sink: object | None = None
+) -> list[VideoRef]:
   """List a playlist without downloading anything.
 
   Args:
     url: Playlist URL.
     cfg: YouTube settings.
+    sink: Optional yt-dlp logger, to mirror its output into the ui.
 
   Returns:
     One VideoRef per entry, skipping unavailable items.
   """
-  opts = _base_opts(cfg) | {"extract_flat": "in_playlist", "skip_download": True}
+  opts = _base_opts(cfg, sink) | {"extract_flat": "in_playlist", "skip_download": True}
   with yt_dlp.YoutubeDL(opts) as ydl:
     info = ydl.extract_info(url, download=False)
   info = info or {}
@@ -126,13 +141,16 @@ def enumerate_playlist(url: str, cfg: YouTubeConfig) -> list[VideoRef]:
   return refs
 
 
-def download(video_id: str, dest: Path, cfg: YouTubeConfig) -> Download:
+def download(
+  video_id: str, dest: Path, cfg: YouTubeConfig, sink: object | None = None
+) -> Download:
   """Fetch one track's audio.
 
   Args:
     video_id: YouTube video id.
     dest: Directory to write into.
     cfg: YouTube settings.
+    sink: Optional yt-dlp logger, to mirror its output into the ui.
 
   Returns:
     A Download describing the result.
@@ -142,7 +160,7 @@ def download(video_id: str, dest: Path, cfg: YouTubeConfig) -> Download:
     RuntimeError: If yt-dlp returns no usable info.
   """
   dest.mkdir(parents=True, exist_ok=True)
-  opts = _base_opts(cfg) | {"outtmpl": str(dest / "%(id)s.%(ext)s")}
+  opts = _base_opts(cfg, sink) | {"outtmpl": str(dest / "%(id)s.%(ext)s")}
   url = f"https://www.youtube.com/watch?v={video_id}"
 
   with yt_dlp.YoutubeDL(opts) as ydl:

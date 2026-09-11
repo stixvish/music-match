@@ -328,6 +328,7 @@ def create_app(database: Path | None = None) -> FastAPI:
   # runs would race on the same staging directory and double the request rate
   # against every source.
   job: dict[str, pipeline.Progress] = {}
+  job_log = pipeline.LogBuffer()
   job_lock = threading.Lock()
 
   @app.post("/api/ingest")
@@ -352,10 +353,18 @@ def create_app(database: Path | None = None) -> FastAPI:
       # its own connection: sqlite forbids sharing one across threads.
       conn = pipeline.open_db(cfg)
       try:
-        pipeline.ingest(url, cfg, limit=request.limit, conn=conn, progress=state)
+        pipeline.ingest(
+          url,
+          cfg,
+          limit=request.limit,
+          conn=conn,
+          progress=state,
+          log_buffer=job_log,
+        )
       except Exception as exc:  # noqa: BLE001 - surface it, never kill the thread
         state.error = str(exc)[:300]
         state.finished = True
+        job_log.add(str(exc)[:300], "error")
       finally:
         conn.close()
 
@@ -366,14 +375,15 @@ def create_app(database: Path | None = None) -> FastAPI:
   def ingest_status() -> dict:
     """State of the current or most recent ingest."""
     state = job.get("current")
-    return (
-      {"running": False}
-      if state is None
-      else {
-        "running": not state.finished,
-        **state.__dict__,
-      }
-    )
+    if state is None:
+      return {"running": False}
+    return {"running": not state.finished, **state.as_dict()}
+
+  @app.get("/api/ingest/log")
+  def ingest_log(since: int = -1) -> dict:
+    """Lines newer than `since`, so a one-second poll stays cheap."""
+    lines, cursor = job_log.since(since)
+    return {"lines": lines, "cursor": cursor}
 
   # The question currently on screen, by option index. The client posts back an
   # index, never a source name: nothing that identifies a source is ever sent

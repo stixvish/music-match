@@ -23,15 +23,19 @@ def fake_ingest(monkeypatch):
   """Replace the pipeline so no test ever touches the network."""
   calls: list[str] = []
 
-  def fake(url, cfg, *, limit=0, conn=None, progress=None, **kwargs):
+  def fake(url, cfg, *, limit=0, conn=None, progress=None, log_buffer=None, **kwargs):
     calls.append(url)
     state = progress or pipeline.Progress()
     state.url = url
     state.total = 2
     state.done = 2
+    state.downloaded = 2
     state.published = 1
     state.queued = 1
     state.finished = True
+    if log_buffer is not None:
+      log_buffer.add("[youtube] fetching player", "info")
+      log_buffer.add("  published: A Song.aiff", "step")
     return state
 
   monkeypatch.setattr(pipeline, "ingest", fake)
@@ -103,3 +107,38 @@ def test_a_finished_run_does_not_block_the_next_one(client, fake_ingest):
   assert (
     client.post("/api/ingest", json={"url": "https://youtu.be/two"}).status_code == 200
   )
+
+
+def test_the_app_hands_its_log_buffer_to_the_pipeline(client, fake_ingest):
+  """The console is only live if the run writes into the buffer the ui reads.
+
+  This wiring is a single keyword argument and its absence is invisible: the
+  run still succeeds, the counters still move, and the console is simply empty
+  forever. It was dropped once already.
+  """
+  client.post("/api/ingest", json={"url": "https://youtu.be/abc"})
+  wait_for_finish(client)
+  body = client.get("/api/ingest/log?since=-1").json()
+  assert [line["text"] for line in body["lines"]] == [
+    "[youtube] fetching player",
+    "  published: A Song.aiff",
+  ]
+  assert body["cursor"] == 1
+
+
+def test_the_log_is_fetched_incrementally(client, fake_ingest):
+  """A one-second poll must not re-send the whole buffer every time."""
+  client.post("/api/ingest", json={"url": "https://youtu.be/abc"})
+  wait_for_finish(client)
+  first = client.get("/api/ingest/log?since=-1").json()
+  again = client.get(f"/api/ingest/log?since={first['cursor']}").json()
+  assert again["lines"] == []
+
+
+def test_stage_counters_reach_the_ui(client, fake_ingest):
+  """`done` alone cannot distinguish downloading from waiting on an api."""
+  client.post("/api/ingest", json={"url": "https://youtu.be/abc"})
+  status = wait_for_finish(client)
+  for key in ("downloaded", "analysed", "resolved", "published", "queued"):
+    assert key in status, key
+  assert status["downloaded"] == 2

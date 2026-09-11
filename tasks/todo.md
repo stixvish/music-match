@@ -100,6 +100,8 @@
   alone. `music serve` → Calibrate.
 - [x] **t31b** add tracks from the web ui — paste a youtube link, worker
   thread, live progress. ingest extracted from `cli` into `pipeline`.
+- [x] **t31c** pipeline console: real yt-dlp output, per-stage counters,
+  `music reset` for a clean end-to-end run
 - [ ] **cp7** review 50 real items, measure seconds/item vs §9's assumed 35 s
 
 ## phase 7 — the real run
