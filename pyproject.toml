@@ -8,13 +8,21 @@ dependencies = [
   "pydantic>=2",
   "httpx",
   "yt-dlp-ejs>=0.8.0",
+  "fastapi>=0.141.1",
+  "uvicorn[standard]>=0.52.4",
 ]
 
 [project.scripts]
 music = "music.cli:main"
 
 [dependency-groups]
-dev = ["ruff", "mypy", "pytest", "pytest-cov"]
+dev = [
+    "ruff",
+    "mypy",
+    "pytest",
+    "pytest-cov",
+    "httpx>=0.28.1",
+]
 # essentia-tensorflow is heavy (~120 MB) and only needed for classify.
 classify = ["essentia-tensorflow"]
 

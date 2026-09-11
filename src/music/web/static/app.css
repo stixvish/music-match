@@ -1,0 +1,164 @@
+/* Apple-derived house style (.claude/skills/apple-design).
+   - system font: it already ships optical sizing and tracking tables
+   - tracking is size-specific, never one value for all sizes
+   - translucent chrome with content scrolling under, not opaque strips
+   - motion lives in JS springs; CSS transitions only for non-gestural fades */
+
+:root {
+  color-scheme: light dark;
+
+  --bg: #f5f5f7;
+  --surface: rgba(255, 255, 255, 0.72);
+  --surface-solid: #fff;
+  --line: rgba(0, 0, 0, 0.08);
+  --text: #1d1d1f;
+  --muted: #6e6e73;
+  --accent: #0071e3;
+  --warn: #b25000;
+  --good: #1d7a3e;
+
+  --r-sm: 8px;
+  --r-md: 12px;
+  --r-lg: 18px;
+  --space: 1rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #000;
+    --surface: rgba(30, 30, 32, 0.72);
+    --surface-solid: #1c1c1e;
+    --line: rgba(255, 255, 255, 0.1);
+    --text: #f5f5f7;
+    --muted: #98989d;
+    --accent: #0a84ff;
+    --warn: #ff9f0a;
+    --good: #30d158;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font: 100%/1.5 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* type scale: tighter tracking as size grows, looser leading as it shrinks */
+h1 { font-size: 1.5rem; line-height: 1.15; letter-spacing: -0.021em; margin: 0; font-weight: 600; }
+h2 { font-size: 1.0625rem; line-height: 1.3; letter-spacing: -0.012em; margin: 0; font-weight: 600; }
+.label { font-size: 0.75rem; letter-spacing: 0.02em; color: var(--muted); text-transform: uppercase; }
+.mono { font-family: "SF Mono", ui-monospace, monospace; font-size: 0.8125rem; }
+
+/* --- layout ------------------------------------------------------------- */
+
+#app { display: grid; grid-template-columns: 19rem 1fr 21rem; height: 100vh; }
+@media (max-width: 60rem) { #app { grid-template-columns: 1fr; overflow: auto; } }
+
+.pane { overflow-y: auto; padding: var(--space); min-width: 0; }
+.pane + .pane { border-left: 1px solid var(--line); }
+
+/* translucent chrome: content scrolls underneath, no opaque strip */
+.chrome {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 0.75rem var(--space);
+  margin: calc(var(--space) * -1) calc(var(--space) * -1) 0;
+  background: var(--surface);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border-bottom: 1px solid var(--line);
+  display: flex; align-items: baseline; gap: 0.5rem; justify-content: space-between;
+}
+/* scroll edge effect rather than a hard divider */
+.chrome::after {
+  content: ""; position: absolute; left: 0; right: 0; bottom: -12px; height: 12px;
+  background: linear-gradient(var(--bg), transparent); opacity: 0.9; pointer-events: none;
+}
+
+/* --- queue -------------------------------------------------------------- */
+
+.item {
+  padding: 0.6rem 0.7rem; border-radius: var(--r-md); cursor: pointer;
+  border: 1px solid transparent; margin-bottom: 2px; will-change: transform;
+}
+.item:hover { background: var(--surface-solid); }
+/* feedback on pointer-DOWN, never only at the end */
+.item:active { transform: scale(0.985); }
+.item[aria-selected="true"] { background: var(--surface-solid); border-color: var(--line); }
+.item .t { font-weight: 550; font-size: 0.9375rem; }
+.item .s { font-size: 0.8125rem; color: var(--muted); }
+
+.pill {
+  display: inline-block; padding: 0.1rem 0.45rem; border-radius: 999px;
+  font-size: 0.6875rem; letter-spacing: 0.01em; border: 1px solid var(--line);
+}
+.pill.review { color: var(--warn); }
+.pill.rip { color: var(--warn); }
+.pill.ok { color: var(--good); }
+
+/* --- fields ------------------------------------------------------------- */
+
+.field {
+  display: grid; grid-template-columns: 8.5rem 1fr; gap: 0.5rem;
+  align-items: center; padding: 0.3rem 0.5rem; border-radius: var(--r-sm);
+}
+.field:hover { background: var(--surface-solid); }
+.field[data-focused="true"] { background: var(--surface-solid); outline: 2px solid var(--accent); }
+.field input {
+  width: 100%; font: inherit; font-size: 0.9375rem; color: var(--text);
+  background: transparent; border: 1px solid transparent; border-radius: var(--r-sm);
+  padding: 0.25rem 0.4rem;
+}
+.field input:focus { background: var(--surface-solid); border-color: var(--accent); outline: none; }
+.field .src { font-size: 0.6875rem; color: var(--muted); }
+.field .src.manual { color: var(--accent); font-weight: 600; }
+.field .src.fallback { color: var(--warn); }
+
+/* --- provenance --------------------------------------------------------- */
+
+.cand {
+  display: flex; justify-content: space-between; gap: 0.5rem; align-items: baseline;
+  padding: 0.35rem 0.5rem; border-radius: var(--r-sm); cursor: pointer;
+}
+.cand:hover { background: var(--surface-solid); }
+.cand:active { transform: scale(0.99); }
+.cand.chosen { outline: 1px solid var(--accent); }
+
+button {
+  font: inherit; font-size: 0.875rem; padding: 0.4rem 0.8rem; border-radius: var(--r-md);
+  border: 1px solid var(--line); background: var(--surface-solid); color: var(--text);
+  cursor: pointer;
+}
+button:active { transform: scale(0.97); }
+button.primary { background: var(--accent); border-color: transparent; color: #fff; font-weight: 550; }
+
+audio { width: 100%; margin: 0.5rem 0; }
+input[type="text"].url {
+  width: 100%; font: inherit; padding: 0.45rem 0.6rem; border-radius: var(--r-md);
+  border: 1px solid var(--line); background: var(--surface-solid); color: var(--text);
+}
+
+kbd {
+  font: inherit; font-size: 0.6875rem; font-family: "SF Mono", ui-monospace, monospace;
+  padding: 0.05rem 0.3rem; border: 1px solid var(--line); border-radius: 4px;
+  background: var(--surface-solid); color: var(--muted);
+}
+
+.empty { color: var(--muted); padding: 2rem 0; text-align: center; }
+
+/* reduced motion is a gentler equivalent, not the absence of feedback */
+@media (prefers-reduced-motion: reduce) {
+  .item:active, .cand:active, button:active { transform: none; }
+  * { animation-duration: 0.01ms !important; }
+}
+@media (prefers-reduced-transparency: reduce) {
+  .chrome { background: var(--surface-solid); backdrop-filter: none; }
+}
+@media (prefers-contrast: more) {
+  :root { --line: currentColor; --surface: var(--surface-solid); }
+}

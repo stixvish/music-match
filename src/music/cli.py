@@ -121,6 +121,34 @@ def _resolve_and_arbitrate(
       FieldCandidate(field="remixer", value=version.remixer, source="derived")
     )
 
+  # classification runs BEFORE candidates are stored, so essentia's genre is
+  # recorded for provenance like any other source. appending it afterwards let
+  # it win arbitration while never appearing in the review ui.
+  #
+  # the family is finalised here, not at classify time: the ISRC override
+  # needs an ISRC, which only exists once identity is resolved (SPEC.md §6).
+  #
+  # the classifier's TOP-LEVEL genre is what routes, not the resolved genre
+  # field — that holds a Discogs *style* ("Dance-pop", "Hip-House") which is
+  # not in the family map and silently routed everything to `other`.
+  by_field = {c.field: c.value for c in candidates}
+  prediction = _classified_genre(item.path)
+  family = family_for_identity(
+    prediction.genre if prediction else "", by_field.get("isrc")
+  )
+  # essentia is the last-resort genre source (SPEC.md §7): it ranks below
+  # every real source, but it describes *this audio* rather than whichever
+  # release a catalogue happened to match.
+  if prediction and prediction.style:
+    candidates.append(
+      FieldCandidate(
+        field="genre",
+        value=prediction.style,
+        source="essentia",
+        confidence=float(prediction.activation),
+      )
+    )
+  conn.execute("UPDATE track SET genre_family=? WHERE id=?", (family, track_id))
   conn.execute(
     "UPDATE track SET identity_confidence=?, norm_artist=?, norm_title=?,"
     " acoustid=?, mb_recording_id=?, updated_at=datetime('now') WHERE id=?",
@@ -155,30 +183,6 @@ def _resolve_and_arbitrate(
     conn.execute("UPDATE track SET status='review' WHERE id=?", (track_id,))
     return False
 
-  # the family is finalised here, not at classify time: the ISRC override
-  # needs an ISRC, which only exists once identity is resolved (SPEC.md §6).
-  #
-  # the classifier's TOP-LEVEL genre is what routes, not the resolved genre
-  # field — that holds a Discogs *style* ("Dance-pop", "Hip-House") which is
-  # not in the family map and silently routed everything to `other`.
-  by_field = {c.field: c.value for c in candidates}
-  prediction = _classified_genre(item.path)
-  family = family_for_identity(
-    prediction.genre if prediction else "", by_field.get("isrc")
-  )
-  # essentia is the last-resort genre source (SPEC.md §7): it ranks below
-  # every real source, but it describes *this audio* rather than whichever
-  # release a catalogue happened to match.
-  if prediction and prediction.style:
-    candidates.append(
-      FieldCandidate(
-        field="genre",
-        value=prediction.style,
-        source="essentia",
-        confidence=float(prediction.activation),
-      )
-    )
-  conn.execute("UPDATE track SET genre_family=? WHERE id=?", (family, track_id))
   persist(conn, track_id, arbitrate(candidates, family=family))
   return True
 
@@ -268,6 +272,17 @@ def cmd_retag(args: argparse.Namespace) -> int:
   return 0
 
 
+def cmd_serve(args: argparse.Namespace) -> int:
+  """Run the local review and editing UI (SPEC.md §15)."""
+  import uvicorn
+
+  from music.web import create_app
+
+  log.info("review ui: http://127.0.0.1:%d", args.port)
+  uvicorn.run(create_app(), host="127.0.0.1", port=args.port, log_level="warning")
+  return 0
+
+
 def cmd_status(args: argparse.Namespace) -> int:  # noqa: ARG001
   """Print counts by stage and status."""
   cfg = config.load()
@@ -321,6 +336,13 @@ def build_parser() -> argparse.ArgumentParser:
   retag_cmd = sub.add_parser("retag", help="re-emit tags from the database")
   retag_cmd.add_argument("--id", type=int, default=None, help="a single track id")
   retag_cmd.set_defaults(func=cmd_retag)
+
+  serve = sub.add_parser("serve", help="open the review and editing web ui")
+  serve.add_argument("--port", type=int, default=8765)
+  serve.set_defaults(func=cmd_serve)
+  review = sub.add_parser("review", help="alias for serve")
+  review.add_argument("--port", type=int, default=8765)
+  review.set_defaults(func=cmd_serve)
 
   doctor = sub.add_parser("doctor", help="check tools, credentials and disk")
   doctor.set_defaults(func=cmd_doctor)

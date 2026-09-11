@@ -91,9 +91,9 @@
 
 ## phase 6 — web ui
 
-- [ ] **t28** review queue + audio preview
-- [ ] **t29** metadata editor; edits are sticky and re-tag the file
-- [ ] **t30** provenance panel: what each source said, per field
+- [x] **t28** review queue + audio preview
+- [x] **t29** metadata editor; edits are sticky and re-tag the file
+- [x] **t30** provenance panel: what each source said, per field
 - [ ] **t31** elicitation mode → populates `precedence`
 - [ ] **cp7** review 50 real items, measure seconds/item vs §9's assumed 35 s
 

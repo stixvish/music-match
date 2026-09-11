@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>music — review</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<div id="app">
+  <!-- wayfinding: every pane says where you are and what is here -->
+  <section class="pane" id="queue-pane">
+    <header class="chrome">
+      <h2>Review queue</h2>
+      <span class="label" id="queue-count"></span>
+    </header>
+    <div id="queue"></div>
+  </section>
+
+  <section class="pane" id="track-pane">
+    <header class="chrome">
+      <h1 id="track-title">Nothing selected</h1>
+      <span class="label" id="track-meta"></span>
+    </header>
+    <div id="track"></div>
+  </section>
+
+  <section class="pane" id="side-pane">
+    <header class="chrome">
+      <h2 id="side-title">Sources</h2>
+      <span class="label" id="side-field"></span>
+    </header>
+    <div id="side"></div>
+  </section>
+</div>
+<script src="/app.js" type="module"></script>
+</body>
+</html>
