@@ -79,6 +79,23 @@ CREATE TABLE IF NOT EXISTS precedence (
   PRIMARY KEY (genre_family, field, rank)
 );
 
+-- every blind comparison the elicitation exercise recorded (SPEC.md §9).
+-- append-only: keeping the raw choices means a better derivation can be re-run
+-- later without asking the user anything twice. `chosen` is empty when the
+-- reviewer saw no meaningful difference, which is evidence in its own right.
+CREATE TABLE IF NOT EXISTS elicitation (
+  id           INTEGER PRIMARY KEY,
+  track_id     INTEGER NOT NULL REFERENCES track(id) ON DELETE CASCADE,
+  genre_family TEXT    NOT NULL,
+  field        TEXT    NOT NULL,
+  chosen       TEXT    NOT NULL,
+  offered      TEXT    NOT NULL,
+  created_at   TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS elicitation_cell
+  ON elicitation (genre_family, field);
+
 CREATE TABLE IF NOT EXISTS review_queue (
   track_id    INTEGER PRIMARY KEY REFERENCES track(id) ON DELETE CASCADE,
   reason      TEXT NOT NULL

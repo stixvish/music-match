@@ -39,6 +39,10 @@
 
 * { box-sizing: border-box; }
 
+/* `display: grid` on #app outranks the user-agent rule for [hidden], so the
+   attribute silently does nothing without this. */
+[hidden] { display: none !important; }
+
 body {
   margin: 0;
   font: 100%/1.5 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
@@ -219,3 +223,84 @@ kbd {
   width: 40px; height: 40px; border-radius: 6px; object-fit: cover;
   border: 1px solid var(--line);
 }
+
+/* --- mode switch --------------------------------------------------------- */
+
+/* a floating segmented control: it sits above the panes rather than stealing a
+   row from the grid, so switching modes does not reflow the review layout. */
+#modes {
+  position: fixed; bottom: 1rem; left: 50%; transform: translateX(-50%);
+  z-index: 10; display: flex; gap: 0.125rem; padding: 0.2rem;
+  border-radius: 999px; border: 1px solid var(--line);
+  background: var(--surface); backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.16);
+}
+.mode {
+  border: none; background: transparent; color: var(--muted);
+  font-size: 0.8125rem; padding: 0.3rem 0.9rem; border-radius: 999px;
+  cursor: pointer;
+}
+.mode[aria-pressed="true"] { background: var(--surface-solid); color: var(--text); font-weight: 600; }
+.mode:active { transform: scale(0.97); }
+
+/* --- calibration --------------------------------------------------------- */
+
+#elicit { max-width: 46rem; margin: 0 auto; padding: 0 var(--space) 6rem; }
+.elicit-chrome { margin-inline: calc(var(--space) * -1); }
+.elicit-ctx { display: flex; align-items: center; gap: 0.5rem; color: var(--muted); margin: 0.5rem 0; }
+.elicit-ask { font-size: 1.25rem; letter-spacing: -0.019em; font-weight: 600; margin: 1.25rem 0 0.75rem; }
+.elicit-help { margin-top: 1rem; }
+
+.choices { display: grid; gap: 0.5rem; }
+/* the choice is the content, so the card is quiet until you touch it */
+.choice {
+  display: grid; grid-template-columns: 1.5rem 1fr; gap: 0.75rem;
+  align-items: center; text-align: left; width: 100%;
+  padding: 0.9rem 1rem; border-radius: var(--r-md);
+  border: 1px solid var(--line); background: var(--surface-solid);
+  color: var(--text); font: inherit; cursor: pointer;
+}
+.choice:hover { border-color: var(--accent); }
+.choice:active { transform: scale(0.99); }
+.choice-value { font-size: 1.0625rem; letter-spacing: -0.012em; }
+.choice-extra { grid-column: 2; font-size: 0.75rem; color: var(--muted); }
+.choice-art { max-width: 9rem; border-radius: var(--r-sm); }
+.key {
+  display: grid; place-items: center; width: 1.5rem; height: 1.5rem;
+  border-radius: 6px; background: var(--bg); color: var(--muted);
+  font-size: 0.75rem; font-family: "SF Mono", ui-monospace, monospace;
+}
+.skip {
+  display: grid; grid-template-columns: 1.5rem 1fr; gap: 0.75rem;
+  align-items: center; text-align: left; width: 100%; margin-top: 0.5rem;
+  padding: 0.6rem 1rem; border-radius: var(--r-md);
+  border: 1px dashed var(--line); background: transparent; color: var(--muted);
+}
+.elicit-done { padding: 2rem 0; }
+table.cells { width: 100%; border-collapse: collapse; margin-top: 0.5rem; font-size: 0.8125rem; }
+table.cells th { text-align: left; font-size: 0.6875rem; text-transform: uppercase;
+  letter-spacing: 0.02em; color: var(--muted); font-weight: 500; padding: 0.35rem 0.5rem; }
+table.cells td { padding: 0.35rem 0.5rem; border-top: 1px solid var(--line); }
+
+/* --- acquisition --------------------------------------------------------- */
+
+#add { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0.35rem; margin-bottom: 0.5rem; }
+#add input {
+  min-width: 0; font: inherit; font-size: 0.8125rem; padding: 0.4rem 0.6rem;
+  border-radius: var(--r-md); border: 1px solid var(--line);
+  background: var(--surface-solid); color: var(--text);
+}
+#add input:focus { border-color: var(--accent); outline: none; }
+#add button { font-size: 0.8125rem; padding: 0.4rem 0.7rem; }
+.add-line { display: grid; gap: 0.3rem; font-size: 0.75rem; color: var(--muted); margin: 0 0 0.6rem; }
+.add-line.done { color: var(--good); }
+.add-line.bad { color: var(--warn); }
+.bar { height: 3px; border-radius: 999px; background: var(--line); overflow: hidden; }
+/* width is the one thing a determinate bar animates, and it is not gestural */
+.bar-fill { height: 100%; background: var(--accent); transition: width 0.3s ease-out; }
+@media (prefers-reduced-motion: reduce) { .bar-fill { transition: none; } }
+
+/* the player is moved into this slot rather than recreated (see app.js) */
+.player { margin: 0.5rem 0; }
+.player audio { width: 100%; display: block; }

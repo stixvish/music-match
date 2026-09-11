@@ -7,6 +7,11 @@
 <link rel="stylesheet" href="/app.css">
 </head>
 <body>
+<nav id="modes" aria-label="Mode">
+  <button class="mode" data-mode="review" aria-pressed="true">Review</button>
+  <button class="mode" data-mode="elicit" aria-pressed="false">Calibrate</button>
+</nav>
+
 <div id="app">
   <!-- wayfinding: every pane says where you are and what is here -->
   <section class="pane" id="queue-pane">
@@ -14,6 +19,15 @@
       <h2>Review queue</h2>
       <span class="label" id="queue-count"></span>
     </header>
+    <!-- acquisition lives here, where tracks arrive. the link box further down
+         the track pane overrides *identity*; these are not the same thing and
+         one used to be mistaken for the other. -->
+    <form id="add" autocomplete="off">
+      <input id="add-url" type="url" inputmode="url"
+             placeholder="Add a YouTube or YouTube Music link…">
+      <button type="submit" id="add-go">Add</button>
+    </form>
+    <div id="add-status"></div>
     <div id="queue"></div>
   </section>
 
@@ -33,6 +47,14 @@
     <div id="side"></div>
   </section>
 </div>
+<section id="elicit" hidden>
+  <header class="chrome elicit-chrome">
+    <h2 id="elicit-field">Calibrate</h2>
+    <span class="label" id="elicit-progress"></span>
+  </header>
+  <div id="elicit-body"></div>
+</section>
+
 <script src="/app.js" type="module"></script>
 </body>
 </html>

@@ -94,7 +94,12 @@
 - [x] **t28** review queue + audio preview
 - [x] **t29** metadata editor; edits are sticky and re-tag the file
 - [x] **t30** provenance panel: what each source said, per field
-- [ ] **t31** elicitation mode → populates `precedence`
+- [x] **t31** elicitation mode → populates `precedence`
+  blind comparison (no source named in page or payload), stratified per
+  (field × family) cell, shrunk toward the built-in ranking, thin cells left
+  alone. `music serve` → Calibrate.
+- [x] **t31b** add tracks from the web ui — paste a youtube link, worker
+  thread, live progress. ingest extracted from `cli` into `pipeline`.
 - [ ] **cp7** review 50 real items, measure seconds/item vs §9's assumed 35 s
 
 ## phase 7 — the real run

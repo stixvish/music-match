@@ -1,6 +1,7 @@
 """HTTP surface for the review and editing UI (SPEC.md §15)."""
 
 import sqlite3
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -8,7 +9,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, Response
 from pydantic import BaseModel
 
-from music import config, db
+from music import config, db, elicit, pipeline
 from music.arbitrate import Decision, arbitrate, persist
 from music.publish import publish_track, retag, tag, transcode
 from music.sources.base import FieldCandidate
@@ -43,6 +44,19 @@ class UrlOverride(BaseModel):
   """An authoritative link pasted by the user."""
 
   url: str
+
+
+class IngestRequest(BaseModel):
+  """A YouTube or YouTube Music link to pull into the library."""
+
+  url: str
+  limit: int = 0
+
+
+class Choice(BaseModel):
+  """One elicitation answer: the index of the option picked, or -1."""
+
+  option: int
 
 
 def _rows(conn: sqlite3.Connection, sql: str, *args: Any) -> list[dict]:
@@ -309,6 +323,130 @@ def create_app(database: Path | None = None) -> FastAPI:
     if not data:
       raise HTTPException(status_code=404, detail="no embedded artwork")
     return Response(content=data, media_type="image/jpeg", headers=no_cache)
+
+  # One ingest at a time. Downloading is slow and rate-limited; two concurrent
+  # runs would race on the same staging directory and double the request rate
+  # against every source.
+  job: dict[str, pipeline.Progress] = {}
+  job_lock = threading.Lock()
+
+  @app.post("/api/ingest")
+  def start_ingest(request: IngestRequest) -> dict:
+    """Download a video or playlist and run it through the pipeline.
+
+    Returns immediately; the run happens on a worker thread and is watched
+    through `/api/ingest/status`. A playlist takes minutes per track, so
+    blocking the request would time out long before the work finished.
+    """
+    url = request.url.strip()
+    if not url:
+      raise HTTPException(status_code=400, detail="no url given")
+    with job_lock:
+      running = job.get("current")
+      if running is not None and not running.finished:
+        raise HTTPException(status_code=409, detail="an ingest is already running")
+      state = pipeline.Progress(url=url)
+      job["current"] = state
+
+    def run() -> None:
+      # its own connection: sqlite forbids sharing one across threads.
+      conn = pipeline.open_db(cfg)
+      try:
+        pipeline.ingest(url, cfg, limit=request.limit, conn=conn, progress=state)
+      except Exception as exc:  # noqa: BLE001 - surface it, never kill the thread
+        state.error = str(exc)[:300]
+        state.finished = True
+      finally:
+        conn.close()
+
+    threading.Thread(target=run, daemon=True, name="ingest").start()
+    return {"ok": True, "url": url}
+
+  @app.get("/api/ingest/status")
+  def ingest_status() -> dict:
+    """State of the current or most recent ingest."""
+    state = job.get("current")
+    return (
+      {"running": False}
+      if state is None
+      else {
+        "running": not state.finished,
+        **state.__dict__,
+      }
+    )
+
+  # The question currently on screen, by option index. The client posts back an
+  # index, never a source name: nothing that identifies a source is ever sent
+  # to the browser, so the comparison stays blind even to "view source"
+  # (SPEC.md §9).
+  pending: dict[str, elicit.Question] = {}
+
+  @app.get("/api/elicit/next")
+  def elicit_next() -> dict:
+    """Serve the next blind comparison, from the least-answered cell."""
+    conn = connect()
+    question = elicit.next_question(conn)
+    state = elicit.progress(conn)
+    if question is None:
+      pending.pop("q", None)
+      return {"done": True, "progress": state.__dict__}
+    pending["q"] = question
+    return {
+      "done": False,
+      "track_id": question.track_id,
+      "field": question.field,
+      "family": question.family,
+      "context": {"title": question.title, "artist": question.artist},
+      "options": [
+        {"value": option.value, "extra": [list(e) for e in option.extra]}
+        for option in question.options
+      ],
+      "progress": state.__dict__,
+    }
+
+  @app.post("/api/elicit/choice")
+  def elicit_choice(choice: Choice) -> dict:
+    """Record an answer. `option` of -1 means the values looked equivalent."""
+    question = pending.get("q")
+    if question is None:
+      raise HTTPException(status_code=409, detail="no question in flight")
+    if choice.option >= len(question.options):
+      raise HTTPException(status_code=400, detail="no such option")
+    chosen = question.options[choice.option].sources if choice.option >= 0 else ()
+    conn = connect()
+    elicit.record(conn, question, chosen)
+    pending.pop("q", None)
+    return {"ok": True}
+
+  @app.get("/api/elicit/progress")
+  def elicit_progress() -> dict:
+    """Counts for the session, and the cells calibrated so far."""
+    conn = connect()
+    derived = elicit.derive(elicit.observations(conn))
+    return {
+      "progress": elicit.progress(conn).__dict__,
+      "cells": [
+        {
+          "family": family,
+          "field": field_name,
+          "answers": count,
+          "ranking": list(derived.get((family, field_name), ())),
+        }
+        for (family, field_name), count in sorted(elicit.cell_counts(conn).items())
+      ],
+    }
+
+  @app.post("/api/elicit/apply")
+  def elicit_apply() -> dict:
+    """Write the derived rankings into `precedence`.
+
+    Re-arbitration is deliberately *not* triggered here. Rewriting every
+    published file is a separate, explicit step (`music retag`), and it should
+    not happen as a side effect of answering a question.
+    """
+    conn = connect()
+    written = elicit.apply(conn)
+    return {"ok": True, "cells": written}
 
   @app.post("/api/track/{track_id}/source")
   def choose_source(track_id: int, edit: FieldEdit) -> dict:

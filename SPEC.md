@@ -475,9 +475,50 @@ Expected outcome: **98–99% correct**, ~25–35 tracks with one wrong field.
 Reaching 99.9% would need 20+ hours. The cheaper lever is re-running resolution
 later against the DB.
 
-**Elicitation method:** stratified sample across genre families; for each
-disputed field, present candidate values side by side with source order
-randomized; derive per-(field × family) weights from the choices.
+**Elicitation method:** for each disputed field, present the candidate values
+side by side **with no source named at all** — not in the page, not in the
+payload. A labelled comparison measures which source the user trusts; an
+unlabelled one measures which value is actually better, and only the second is
+worth writing down. Answers are not revealed per question either: "you picked
+Discogs" would anchor the next fifty answers toward consistency rather than
+judgement.
+
+**Stratification is per (field × family) cell, not per track.** A random sample
+of 120 tracks would ask `genre` for pop eighty times and never once for world.
+Each cell is asked until it has `TARGET_PER_CELL` (8) answers, then retires,
+which is also what makes the session finite.
+
+**Only fields that precedence decides, and that a human can judge, are asked.**
+`release_date` and `year` are excluded because `_earliest` decides them and the
+ranking is never consulted; `bpm` and `key` because they come from local
+analysis; `album_artist`, `track_number` and `disc_number` because they move
+atomically with `album` and are shown as part of that one question. `isrc` and
+`catalog_number` are excluded on the second ground: an identifier is right or
+wrong rather than better or worse, and nobody can tell which by reading it —
+asking would collect coin flips and record them as preference.
+
+**Derivation shrinks toward the built-in ranking.** A cell's score per source is
+
+```
+(wins + PRIOR_WEIGHT * prior) / (appearances + PRIOR_WEIGHT)
+```
+
+where `prior` is the source's position in the default table. A cell with no
+evidence therefore reproduces the default exactly, a source shown once and
+picked once barely moves, and a source that keeps winning climbs past sources
+ranked above it. A source never shown keeps its default position instead of
+falling to last. Below `MIN_OBSERVATIONS` (5) a cell is **not written at all** —
+a ranking derived from one or two answers is worse than the reasoned default.
+
+Raw choices are kept in the `elicitation` table rather than only the derived
+ranking, so a better derivation can be re-run later without asking anything
+twice — the same reason the pipeline keeps `field_candidate` (§11).
+
+Verified end to end: 8 answers against `electronic`/`genre` moved the table from
+`beatport → discogs → musicbrainz → essentia` to
+`beatport → itunes → musicbrainz → discogs → essentia`, and flipped that
+track's arbitrated genre from `Progressive House` to `Dance`. `beatport` held
+first place throughout despite never being offered, which is the prior working.
 
 ## 10. format probe — results
 
@@ -824,6 +865,18 @@ any time — not just on the ones the pipeline doubted.
   reminder whenever a published file is edited.
 - **Bulk operations.** Multi-select for the predictable batch fixes — a whole
   mislabelled genre family, or a run of tracks from one bad playlist.
+- **Acquisition belongs in the ui.** A YouTube or YouTube Music link is pasted
+  into the queue pane and runs on a worker thread, with live progress; one run
+  at a time, since two would race on the staging directory and double the
+  request rate against every source. The link box in the *track* pane overrides
+  identity and is a different thing — having only that one was read as the
+  place to add tracks.
+- **One audio element per mode, moved rather than rebuilt.** Re-rendering a
+  pane used to construct a fresh `<audio>`; each discarded element holds its
+  connection until collection, so a handful of renders exhausts Chrome's
+  six-connections-per-host budget and every later request stalls while the
+  server stays perfectly healthy. At ~600 calibration questions this is the
+  difference between a working session and an unexplainable one.
 - **Published tracks stay reachable.** The status filter defaults to `review`,
   but a published track must remain one click away, show where it was filed,
   and say that its primary action re-tags rather than publishes. An unselected

@@ -26,6 +26,41 @@ function spring(el, from, to, { response = 0.35, onFrame } = {}) {
   return () => cancelAnimationFrame(raf);
 }
 
+const players = {};
+
+/** One persistent <audio> per mode.
+ *
+ *  Re-rendering a pane used to build a fresh <audio> each time. The discarded
+ *  element keeps its connection open until it is collected, so a handful of
+ *  renders exhausts Chrome's six-connections-per-host budget and every later
+ *  request stalls — with the server perfectly healthy, which is what makes it
+ *  so hard to read. Moving one element into place preserves both the
+ *  connection and the playback position. */
+function player(key) {
+  let el = players[key];
+  if (!el) {
+    el = document.createElement('audio');
+    el.controls = true;
+    el.preload = 'metadata';
+    players[key] = el;
+  }
+  return el;
+}
+
+/** Mount the mode's player in `slotId`, pointing at `src`. */
+function mountPlayer(key, slotId, src) {
+  const el = player(key);
+  const slot = $(slotId);
+  if (!slot) return;
+  if (el.getAttribute('src') !== src) {
+    el.pause();
+    el.setAttribute('src', src);
+    el.load();
+  }
+  slot.appendChild(el);
+}
+
+
 const api = {
   async tracks(status) {
     const q = status ? `?status=${encodeURIComponent(status)}` : '';
@@ -39,6 +74,24 @@ const api = {
     })).json();
   },
   async accept(id) { return (await fetch(`/api/track/${id}/accept`, { method: 'POST' })).json(); },
+  async ingest(url) {
+    const r = await fetch('/api/ingest', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ url }),
+    });
+    if (!r.ok) throw new Error((await r.json()).detail);
+    return r.json();
+  },
+  async ingestStatus() { return (await fetch('/api/ingest/status')).json(); },
+  async elicitNext() { return (await fetch('/api/elicit/next')).json(); },
+  async elicitChoice(option) {
+    return (await fetch('/api/elicit/choice', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ option }),
+    })).json();
+  },
+  async elicitProgress() { return (await fetch('/api/elicit/progress')).json(); },
+  async elicitApply() { return (await fetch('/api/elicit/apply', { method: 'POST' })).json(); },
   async override(id, url) {
     const r = await fetch(`/api/track/${id}/url`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
@@ -49,7 +102,8 @@ const api = {
   },
 };
 
-const state = { list: [], counts: {}, index: 0, detail: null, field: null, filter: 'review' };
+const state = { list: [], counts: {}, index: 0, detail: null, field: null,
+  filter: 'review', mode: 'review', question: null };
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -156,7 +210,7 @@ function renderTrack() {
     </div>
     <!-- metadata, not none: the duration appears without pressing play, so a
          working player never looks like a broken one. the files are local. -->
-    <audio id="audio" controls preload="metadata" src="/api/audio/${t.id}"></audio>
+    <div class="player" id="track-player"></div>
     ${t.published_path
       ? `<p class="path">Published to ${esc(t.published_path)}</p>`
       : ''}
@@ -187,6 +241,7 @@ function renderTrack() {
       <kbd>↵</kbd> accept
     </p>`;
 
+  mountPlayer('review', 'track-player', `/api/audio/${t.id}`);
   for (const el of document.querySelectorAll('.field')) {
     el.addEventListener('click', () => focusField(el.dataset.field));
   }
@@ -263,9 +318,202 @@ async function acceptCurrent() {
   await loadQueue();
 }
 
+// --- acquisition ----------------------------------------------------------
+
+let ingestTimer = 0;
+
+async function pollIngest() {
+  const s = await api.ingestStatus();
+  const box = $('add-status');
+  if (!s.url) { box.innerHTML = ''; return false; }
+
+  if (s.error) {
+    box.innerHTML = `<p class="add-line bad">${esc(s.error)}</p>`;
+    return false;
+  }
+  const pct = s.total ? Math.round((100 * s.done) / s.total) : 0;
+  const tail = [
+    s.published ? `${s.published} published` : '',
+    s.queued ? `${s.queued} to review` : '',
+    s.skipped ? `${s.skipped} already had` : '',
+    s.failed ? `${s.failed} failed` : '',
+  ].filter(Boolean).join(' · ');
+
+  box.innerHTML = s.running
+    ? `<div class="add-line">
+         <div class="bar"><div class="bar-fill" style="width:${pct}%"></div></div>
+         <span>${s.done}/${s.total} · ${esc(s.current || 'starting…')}</span>
+       </div>`
+    : `<p class="add-line done">Finished — ${esc(tail || 'nothing new')}</p>`;
+  return Boolean(s.running);
+}
+
+async function watchIngest() {
+  clearInterval(ingestTimer);
+  const tick = async () => {
+    const running = await pollIngest();
+    // the queue grows as tracks land, so refresh it alongside the progress
+    await loadQueue();
+    if (!running) clearInterval(ingestTimer);
+  };
+  await tick();
+  ingestTimer = setInterval(tick, 2000);
+}
+
+$('add').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const input = $('add-url');
+  const url = input.value.trim();
+  if (!url) return;
+  try {
+    await api.ingest(url);
+    input.value = '';
+    watchIngest();
+  } catch (err) {
+    $('add-status').innerHTML = `<p class="add-line bad">${esc(err.message)}</p>`;
+  }
+});
+
+// --- calibration ----------------------------------------------------------
+//
+// Blind comparison (SPEC.md §9). The server sends values and never source
+// names, so nothing here can leak the ranking — not to the eye, and not to
+// view-source. Answers are not revealed per question either: seeing "you
+// picked Discogs" would anchor the next fifty answers toward consistency
+// rather than judgement.
+
+function setMode(mode) {
+  state.mode = mode;
+  $('app').hidden = mode !== 'review';
+  $('elicit').hidden = mode !== 'elicit';
+  for (const el of document.querySelectorAll('.mode')) {
+    el.setAttribute('aria-pressed', String(el.dataset.mode === mode));
+  }
+  if (mode === 'elicit') nextQuestion();
+}
+
+function fieldLabel(f) { return f.replace(/_/g, ' '); }
+
+async function nextQuestion() {
+  const q = await api.elicitNext();
+  state.question = q.done ? null : q;
+  renderQuestion(q);
+}
+
+function renderQuestion(q) {
+  const p = q.progress || {};
+  // `remaining` is an upper bound: a pair still collapses to one option when
+  // the sources turn out to agree, and is skipped rather than asked. Showing
+  // "5 left" beside "complete" reads as a bug, so the count stops at the end.
+  $('elicit-progress').textContent = q.done
+    ? `${p.answered || 0} answered · ${p.cells_started || 0} cells`
+    : `${p.answered || 0} answered · ${p.remaining || 0} left · ${p.cells_done || 0} cells done`;
+
+  if (q.done) {
+    $('elicit-field').textContent = 'Calibration complete';
+    $('elicit-body').innerHTML = `
+      <div class="elicit-done">
+        <p>Every reachable cell has enough answers, or has run out of tracks
+           that disagree.</p>
+        <button class="primary" id="apply">Write precedence table</button>
+        <div id="apply-result"></div>
+      </div>`;
+    $('apply').addEventListener('click', applyRanking);
+    return;
+  }
+
+  $('elicit-field').textContent = fieldLabel(q.field);
+  const ctx = [q.context.artist, q.context.title].filter(Boolean).join(' — ');
+  const isArt = q.field === 'artwork_url';
+
+  $('elicit-body').innerHTML = `
+    <p class="elicit-ctx">${esc(ctx || `track ${q.track_id}`)}
+      <span class="pill">${esc(q.family)}</span></p>
+    <div class="player" id="elicit-player"></div>
+    <p class="elicit-ask">Which ${esc(fieldLabel(q.field))} is better?</p>
+    <div class="choices">
+      ${q.options.map((o, i) => `
+        <button class="choice" data-i="${i}">
+          <span class="key">${i + 1}</span>
+          ${isArt
+            ? `<img class="choice-art" src="${esc(o.value)}" alt="cover option ${i + 1}">`
+            : `<span class="choice-value">${esc(o.value)}</span>`}
+          ${o.extra.length
+            ? `<span class="choice-extra">${o.extra
+                .map(([k, v]) => `${esc(k)} ${esc(v)}`).join(' · ')}</span>`
+            : ''}
+        </button>`).join('')}
+    </div>
+    <button class="skip" id="no-diff"><span class="key">0</span> No real difference</button>
+    <p class="label elicit-help">
+      <kbd>1</kbd>–<kbd>${q.options.length}</kbd> choose · <kbd>0</kbd> no difference ·
+      <kbd>space</kbd> play
+    </p>`;
+
+  mountPlayer('elicit', 'elicit-player', `/api/audio/${q.track_id}`);
+  for (const el of document.querySelectorAll('.choice')) {
+    el.addEventListener('click', () => answer(Number(el.dataset.i)));
+  }
+  $('no-diff').addEventListener('click', () => answer(-1));
+}
+
+async function answer(option) {
+  if (!state.question) return;
+  const el = option >= 0
+    ? document.querySelector(`.choice[data-i="${option}"]`) : $('no-diff');
+  // feedback lands on the chosen card before the next question replaces it
+  if (el) spring(el, 0, 1, { response: 0.25, onFrame: (v) => {
+    el.style.transform = `scale(${1 - 0.03 * Math.max(0, 1 - v)})`;
+  } });
+  state.question = null;
+  await api.elicitChoice(option);
+  nextQuestion();
+}
+
+async function applyRanking() {
+  const r = await api.elicitApply();
+  const detail = await api.elicitProgress();
+  const rows = detail.cells.filter((c) => c.ranking.length);
+  const thin = detail.cells.filter((c) => !c.ranking.length);
+
+  // "0 cells written" on its own reads as a failure. It is the guard doing its
+  // job: a ranking derived from one or two answers is worse than the built-in
+  // default, so a thin cell is deliberately left alone.
+  $('apply-result').innerHTML = rows.length
+    ? `<p class="label" style="margin-top:1rem">${r.cells} cells written</p>
+       <table class="cells">
+         <tr><th>family</th><th>field</th><th>answers</th><th>ranking</th></tr>
+         ${rows.map((c) => `<tr>
+           <td>${esc(c.family)}</td><td>${esc(fieldLabel(c.field))}</td>
+           <td>${c.answers}</td>
+           <td class="mono">${esc(c.ranking.join(' → '))}</td></tr>`).join('')}
+       </table>
+       <p class="label">Run <span class="mono">music retag</span> to re-emit
+         tags with the calibrated table.</p>`
+    : `<p class="add-line" style="margin-top:1rem">Nothing written yet — every
+         cell still has too few answers to beat the built-in ranking.
+         ${thin.length ? `${thin.length} cell${thin.length === 1 ? '' : 's'}
+         started; each needs at least 5 answers.` : ''}
+         Add more tracks and calibrate again.</p>`;
+}
+
+for (const el of document.querySelectorAll('.mode')) {
+  el.addEventListener('click', () => setMode(el.dataset.mode));
+}
+
 addEventListener('keydown', (e) => {
   if (e.target.tagName === 'INPUT' && e.key !== 'Enter') return;
-  const audio = $('audio');
+  const audio = players[state.mode === 'elicit' ? 'elicit' : 'review'];
+  if (state.mode === 'elicit') {
+    if (e.key === ' ') { e.preventDefault(); audio && (audio.paused ? audio.play() : audio.pause()); }
+    else if (/^[0-9]$/.test(e.key) && state.question) {
+      e.preventDefault();
+      const n = Number(e.key);
+      if (n === 0) answer(-1);
+      else if (n <= state.question.options.length) answer(n - 1);
+    }
+    return;
+  }
   if (e.key === 'j' || e.key === 'ArrowDown') { e.preventDefault(); selectIndex(Math.min(state.index + 1, state.list.length - 1)); }
   else if (e.key === 'k' || e.key === 'ArrowUp') { e.preventDefault(); selectIndex(Math.max(state.index - 1, 0)); }
   else if (e.key === ' ') { e.preventDefault(); audio && (audio.paused ? audio.play() : audio.pause()); }
@@ -273,3 +521,4 @@ addEventListener('keydown', (e) => {
 });
 
 loadQueue();
+pollIngest();

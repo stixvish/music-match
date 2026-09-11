@@ -8,6 +8,7 @@ from music import db
 
 EXPECTED_TABLES = [
   "api_cache",
+  "elicitation",
   "field_candidate",
   "precedence",
   "resolved_field",

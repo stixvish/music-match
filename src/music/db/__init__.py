@@ -12,7 +12,7 @@ from pathlib import Path
 SCHEMA = Path(__file__).parent / "schema.sql"
 
 # bumped whenever schema.sql changes in a way that needs a migration step.
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 def connect(path: Path) -> sqlite3.Connection:
@@ -49,6 +49,8 @@ def migrate(conn: sqlite3.Connection) -> int:
   conn.executescript(SCHEMA.read_text(encoding="utf-8"))
   if 0 < current < 2:
     _migrate_v1_to_v2(conn)
+  # v2 -> v3 adds the `elicitation` table, which `CREATE TABLE IF NOT EXISTS`
+  # above has already created. no data migration is needed.
   conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
   return SCHEMA_VERSION
 
