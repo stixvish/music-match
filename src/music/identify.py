@@ -89,6 +89,7 @@ class Match:
   rival_gap: int | None = None
   acoustid_score: float | None = None
   variant_mismatch: bool = False
+  artist_unrelated: bool = False
 
   @property
   def duration_ok(self) -> bool:
@@ -201,6 +202,36 @@ def is_plausible(query_artist: str, query_title: str, artist: str, title: str) -
   return match_score(query_artist, query_title, artist, title) >= PLAUSIBLE
 
 
+def artist_is_unrelated(query_artist: str, matched_artist: str) -> bool:
+  """Whether a match's artist bears no relation to the one we searched for.
+
+  This is the cover signature. A fingerprint match carries the right title and
+  a stranger's name: `Waiting for Love` by "Die NotenDealer", `We Are Never
+  Ever Getting Back Together` by "Luke Conard". Title similarity cannot
+  distinguish those from the real thing, so the artist has to be checked
+  separately — but only as a confidence signal, never as a selection filter.
+
+  A YouTube channel name usually *contains* the artist (`jayseanworldwide`,
+  `iyazlive`, `seankingston`), so containment either way counts as related.
+  A renamed band does not (`push baby` is Rixton), which this will flag for
+  review — the wrong way round is publishing a cover as the original.
+
+  Args:
+    query_artist: Normalised artist we searched for.
+    matched_artist: Artist the match is credited to.
+
+  Returns:
+    True when the two share nothing.
+  """
+  left = re.sub(r"[^a-z0-9]", "", (query_artist or "").casefold())
+  right = re.sub(r"[^a-z0-9]", "", (matched_artist or "").casefold())
+  if not left or not right:
+    return False
+  if left in right or right in left:
+    return False
+  return difflib.SequenceMatcher(None, left, right).ratio() < 0.5
+
+
 def confidence(match: Match) -> float:
   """Score an identity from 0.0 to 1.0 (SPEC.md §12).
 
@@ -221,6 +252,10 @@ def confidence(match: Match) -> float:
   elif match.evidence is Evidence.ACOUSTID:
     strong = (match.acoustid_score or 0.0) >= 0.90 and match.duration_ok
     base = 0.95 if strong else 0.50
+    # a fingerprint match credited to a stranger is a cover, and covers are
+    # the one wrong answer that title scoring cannot see (SPEC.md §12)
+    if match.artist_unrelated:
+      base = min(base, 0.50)
   else:
     score = match.search_score or 0
     # a close rival means the search could not tell two recordings apart

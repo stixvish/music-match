@@ -777,6 +777,38 @@ every source offers only a compilation the album fields are now dropped: an
 empty album is visibly incomplete and gets fixed in review, a wrong one
 propagates into the filename, the folder and both DJ apps.
 
+### measured outcome, and its cost to the review budget
+
+Re-resolving the first run's 106 tracks with all of the above:
+
+| | before | after |
+|---|---|---|
+| published as the wrong song | 14 | 0 |
+| covers reaching the library silently | 4 | 0 |
+| auto-accept rate | 95% | **75.5%** |
+| review queue | 20 | 26 |
+
+Cover detection found two failures that manual inspection had missed —
+`Call Me Maybe` credited to Kidz Bop and `FourFiveSeconds` to Elliot Rhoads —
+so the original damage was 14 of 83, not the 12 found by eye.
+
+**This breaks the §9 budget as written.** That budget assumes ≥84% auto-accept;
+at 75.5% the review queue over 2,329 tracks is roughly 570 items, about 5.5
+hours at the assumed 35 s each. The previous 95% was not real — one track in
+six of those was wrong — so the honest position is that the budget was never
+being met, only unmeasured.
+
+**The cheapest way back** is that a suspect fingerprint is not the same as an
+unknown identity. Of the 26 review items, several are tracks where the
+fingerprint is dubious *and iTunes and Spotify independently agree on artist
+and title* — `Call Me Maybe` and `FourFiveSeconds` are both in that group.
+Cross-source agreement is exactly the evidence `_consensus` already computes,
+and treating it as identity confirmation would return those to auto-accept
+without weakening anything. It needs the enrichment candidates to be available
+when confidence is computed, which today they are not: enrichment runs after
+identity is settled, deliberately (§12), so this is a real change rather than a
+tweak. **Not yet built.**
+
 ### result selection — one scorer, three call sites
 
 Every source was asked for several results and used only the first. iTunes and
@@ -836,10 +868,34 @@ twelve tracks because two sources happened to be right; the confidence still
 read 0.95, so the review queue never saw them, and a track with only one good
 source would still have published silently wrong.
 
-**Documented limit:** a *cover* is not caught by the gate, because it carries
-the right title — `Luke Conard - We Are Never Ever Getting Back Together`
-scores 0.75 against a Taylor Swift query. Ranking handles it (the original
-outscores the cover), but the gate alone will not reject one.
+**Covers are handled by a separate signal, because title scoring cannot see
+them.** A cover carries the right title and a stranger's name, so it clears
+every threshold above. Re-resolving the first run's library with ranking alone
+left two tracks still wrong at 0.95 — `Waiting for Love` credited to
+"Die NotenDealer" and `We Are Never Ever Getting Back Together` to
+"Luke Conard" — where the AcoustID entry linked only the cover. Arbitration
+rescued both, but confidence stayed at auto-accept, so review never saw them.
+
+`artist_is_unrelated` therefore checks the credited artist against the query
+independently and caps ACOUSTID confidence at 0.50 when they share nothing. It
+is a **confidence signal only, never a selection filter** — filtering on artist
+would reject every track whose query artist is a channel name.
+
+Containment either way counts as related, which is what makes it safe on real
+data. Verified against every query/match pair from the first run:
+
+```
+flagged      Avicii / Die NotenDealer   Taylor Swift / Luke Conard
+not flagged  jayseanworldwide / Jay Sean    iyazlive / Iyaz
+             Queen Official / Queen         JAY-Z / Jay-Z
+             kesha / Ke$ha                  will i am / will.i.am
+             Black Eyed Peas / The Black Eyed Peas
+```
+
+One known false positive: `push baby` is Rixton, a renamed band, and it is
+flagged. That costs one review item. Relaxing until a renamed band passes would
+let covers through, and a cover published as the original is silent and
+permanent — so the rule errs toward asking.
 
 **Still open:** the cover case above, and a query artist that is an
 unrecognisable channel name (`jayseanworldwide`) still narrows which sources

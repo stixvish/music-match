@@ -14,6 +14,7 @@ from music.identify import (
   PLAUSIBLE,
   Evidence,
   Match,
+  artist_is_unrelated,
   match_score,
   variant_mismatch,
 )
@@ -163,6 +164,9 @@ class Resolver:
       duration_delta_s=0.0 if delta is None else delta,
       variant_mismatch=variant_mismatch(
         identity.title, str(recording.get("title") or "")
+      ),
+      artist_unrelated=artist_is_unrelated(
+        identity.artist, recording_artist(recording)
       ),
     )
     return Resolution(

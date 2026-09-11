@@ -2,7 +2,16 @@
 
 import pytest
 
-from music.identify import PLAUSIBLE, is_plausible, match_score
+from music.identify import (
+  PLAUSIBLE,
+  Evidence,
+  Match,
+  artist_is_unrelated,
+  confidence,
+  is_plausible,
+  match_score,
+  should_auto_accept,
+)
 from music.sources.base import Identity, best_result
 
 
@@ -142,3 +151,71 @@ def test_the_original_outranks_the_cover():
     ],
   )
   assert got["artistName"] == "Taylor Swift"
+
+
+# --- covers ----------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+  ("query", "matched"),
+  [
+    ("Avicii", "Die NotenDealer"),
+    ("Taylor Swift", "Luke Conard"),
+    ("Morgan Wallen", "Metro Station"),
+    ("Beyonce", "Deborah Cox"),
+  ],
+)
+def test_a_stranger_credit_is_flagged(query, matched):
+  """A fingerprint match carrying the right title and a stranger's name.
+
+  Title scoring cannot see this, so it is checked separately and used only to
+  hold confidence down — never to filter a result out.
+  """
+  assert artist_is_unrelated(query, matched)
+
+
+@pytest.mark.parametrize(
+  ("query", "matched"),
+  [
+    ("jayseanworldwide", "Jay Sean"),
+    ("iyazlive", "Iyaz"),
+    ("seankingston", "Sean Kingston"),
+    ("Queen Official", "Queen"),
+    ("The Kid LAROI.", "The Kid LAROI"),
+    ("JAŸ-Z", "Jay‐Z"),
+    ("Black Eyed Peas", "The Black Eyed Peas"),
+    ("kesha", "Ke$ha"),
+    ("will i am", "will.i.am"),
+    ("Anne-Marie", "Anne‐Marie"),
+    ("MKTO Band", "MKTO"),
+  ],
+)
+def test_channel_names_and_stylings_are_not_flagged(query, matched):
+  """Every real query/match pair from the first hundred-track run."""
+  assert not artist_is_unrelated(query, matched)
+
+
+def test_a_renamed_band_is_flagged_and_that_is_the_safe_direction():
+  """`push baby` is Rixton. This costs one review item.
+
+  The alternative — relaxing until a renamed band passes — lets a cover
+  through, and a cover published as the original is silent and permanent.
+  """
+  assert artist_is_unrelated("push baby", "Rixton")
+
+
+def test_a_cover_no_longer_auto_accepts():
+  match = Match(
+    evidence=Evidence.ACOUSTID,
+    acoustid_score=0.99,
+    duration_delta_s=0.0,
+    artist_unrelated=True,
+  )
+  assert confidence(match) == 0.50
+  assert not should_auto_accept(match)
+
+
+def test_a_genuine_fingerprint_match_still_auto_accepts():
+  match = Match(evidence=Evidence.ACOUSTID, acoustid_score=0.99, duration_delta_s=0.0)
+  assert confidence(match) == 0.95
+  assert should_auto_accept(match)
