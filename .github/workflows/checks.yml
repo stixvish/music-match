@@ -46,4 +46,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: python3 tools/check_spec.py
+      - uses: astral-sh/setup-uv@v5
+      # must be the project's python: check_spec.py uses 3.14 syntax (PEP 758)
+      - run: uv sync
+      - run: uv run python tools/check_spec.py
