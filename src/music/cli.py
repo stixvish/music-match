@@ -137,6 +137,100 @@ def cmd_status(args: argparse.Namespace) -> int:  # noqa: ARG001
   return 0
 
 
+def cmd_reset(args: argparse.Namespace) -> int:
+  """Delete the library, staging files and database, for a clean run.
+
+  The database is the source of truth and the audio is a regenerable
+  projection (SPEC.md §11) — but a reset throws away every manual edit and
+  every recorded calibration answer too, and those are not regenerable from
+  anything. Hence the typed confirmation.
+
+  Serato and rekordbox keep their own databases pointing at these paths; after
+  a reset their libraries will reference files that no longer exist.
+  """
+  cfg = config.load()
+  targets = [
+    ("library", cfg.paths.library),
+    ("staging", cfg.paths.staging),
+    ("database", cfg.paths.database),
+  ]
+  if args.keep_staging:
+    targets = [t for t in targets if t[0] != "staging"]
+
+  print("this will permanently delete:")
+  total_files = total_bytes = 0
+  for label, path in targets:
+    files = bytes_ = 0
+    if path.is_dir():
+      for item in path.rglob("*"):
+        if item.is_file():
+          files += 1
+          bytes_ += item.stat().st_size
+    elif path.is_file():
+      files, bytes_ = 1, path.stat().st_size
+    total_files += files
+    total_bytes += bytes_
+    print(f"  {label:<9} {files:>6} file(s)  {bytes_ / 1024**3:>6.2f} GB  {path}")
+
+  if not total_files:
+    print("nothing to delete")
+    return 0
+
+  counts = _reset_counts(cfg)
+  if counts:
+    print(
+      f"\nthe database holds {counts['tracks']} track(s),"
+      f" {counts['manual']} manual edit(s) and"
+      f" {counts['answers']} calibration answer(s) — none of it recoverable."
+    )
+
+  if not args.yes:
+    print(f'\ntype "delete {total_files}" to confirm: ', end="", flush=True)
+    if sys.stdin.readline().strip() != f"delete {total_files}":
+      print("aborted")
+      return 1
+
+  for label, path in targets:
+    if path.is_dir():
+      shutil.rmtree(path)
+    elif path.is_file():
+      path.unlink()
+      # sqlite leaves these behind in wal mode; a stale -wal against a new
+      # database is a corruption report waiting to happen
+      for suffix in ("-wal", "-shm"):
+        sidecar = path.with_name(path.name + suffix)
+        if sidecar.exists():
+          sidecar.unlink()
+    print(f"  removed {label}")
+  print("reset complete; run `music ingest <url>` to start again")
+  return 0
+
+
+def _reset_counts(cfg: config.Config) -> dict[str, int] | None:
+  """Count what a reset would destroy that nothing can rebuild.
+
+  Args:
+    cfg: Runtime configuration.
+
+  Returns:
+    Counts of tracks, manual edits and calibration answers, or None if there
+    is no readable database.
+  """
+  if not cfg.paths.database.is_file():
+    return None
+  try:
+    conn = db.connect(cfg.paths.database)
+    one = conn.execute("SELECT count(*) n FROM track").fetchone()["n"]
+    manual = conn.execute(
+      "SELECT count(*) n FROM resolved_field WHERE decided_by = 'manual'"
+    ).fetchone()["n"]
+    answers = conn.execute("SELECT count(*) n FROM elicitation").fetchone()["n"]
+    conn.close()
+  except Exception:  # noqa: BLE001 - a broken database is one more reason to reset
+    return None
+  return {"tracks": one, "manual": manual, "answers": answers}
+
+
 def cmd_doctor(args: argparse.Namespace) -> int:  # noqa: ARG001
   """Check that the environment can actually run a job (SPEC.md §18)."""
   cfg = config.load()
@@ -187,6 +281,17 @@ def build_parser() -> argparse.ArgumentParser:
       help="fail if --port is taken instead of trying the next one",
     )
     sp.set_defaults(func=cmd_serve)
+
+  reset = sub.add_parser(
+    "reset", help="delete the library, staging and database and start over"
+  )
+  reset.add_argument("--yes", action="store_true", help="skip the typed confirmation")
+  reset.add_argument(
+    "--keep-staging",
+    action="store_true",
+    help="keep downloaded audio, so a rebuild needs no re-download",
+  )
+  reset.set_defaults(func=cmd_reset)
 
   doctor = sub.add_parser("doctor", help="check tools, credentials and disk")
   doctor.set_defaults(func=cmd_doctor)
