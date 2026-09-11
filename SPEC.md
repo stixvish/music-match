@@ -520,6 +520,29 @@ Each field was written with exactly one frame, so display confirms the mapping.
   until **Reload Tag** — confirming that Rekordbox caches tags per path and
   will not re-read on reimport. Operational rule: **tag before import.**
 
+### the file is written by more than one tool
+
+Rekordbox and Serato both write into the same ID3 tag we do. Two consequences,
+both measured on real files.
+
+**Frames this project does not own are preserved across a rewrite.** Serato
+stores its beatgrid and cue points in `GEOB` frames — `Serato BeatGrid`,
+`Serato Markers2`, `Serato Autotags`, `Serato Overview`. A delete-then-write
+destroyed all four on a real library file. `tag.write` now carries every
+unowned frame across, so `music retag` cannot cost you an analysis. Owned
+frames are `FRAME_MAP` plus `COMM` and `APIC`; everything else belongs to
+another tool.
+
+**Do not let Rekordbox write its analysed key back to the file.** Rekordbox has
+a setting for this. Leaving it off keeps the *discovered* key — from a source
+that knows the release — instead of overwriting it with an analysis of a lossy
+transcode. Turning it on makes Rekordbox and this pipeline fight over `TKEY`,
+and the last writer wins.
+
+BPM is the exception and needs no protection: Rekordbox recomputes it on import
+regardless (§10), and beatgrids get adjusted by hand anyway, so `TBPM` is
+advisory in both directions.
+
 ### flac key map (recorded for a possible space-constrained USB build)
 
 `REMIXER` (not MIXARTIST) · `LABEL` · `INITIALKEY` (not KEY) · `BPM` (not
