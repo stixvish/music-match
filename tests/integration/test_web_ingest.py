@@ -176,3 +176,25 @@ def test_several_links_are_enumerated_together(monkeypatch, client):
   assert seen == ["https://youtu.be/list-a", "https://youtu.be/list-b"]
   assert state.total == 3, "the shared video must be counted once"
   assert state.skipped == 3
+
+
+def test_the_log_endpoint_is_idempotent_for_a_given_cursor(client, fake_ingest):
+  """Two reads at the same cursor return the same lines — by design.
+
+  This is what made the console duplicate every line. The client polled on a
+  `setInterval`, which fires whether or not the previous tick returned, and
+  each tick made several requests. Overlapping ticks both read the same stale
+  cursor and both appended the batch, so "tagging and filing" showed up twice.
+
+  The endpoint is right to answer this way; the client is now single-flight
+  and reschedules only after a tick completes.
+  """
+  client.post("/api/ingest", json={"url": "https://youtu.be/abc"})
+  wait_for_finish(client)
+  first = client.get("/api/ingest/log?since=-1").json()
+  repeat = client.get("/api/ingest/log?since=-1").json()
+  assert first["lines"] == repeat["lines"]
+  assert first["cursor"] == repeat["cursor"]
+
+  after = client.get(f"/api/ingest/log?since={first['cursor']}").json()
+  assert after["lines"] == []

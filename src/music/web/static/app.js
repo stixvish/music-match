@@ -443,7 +443,21 @@ function setLogOpen(open) {
   btn.setAttribute('aria-expanded', String(open));
 }
 
+// single flight: belt and braces, so any future caller cannot reintroduce the
+// overlapping-poll duplication above
+let polling = false;
+
 async function pollIngest() {
+  if (polling) return true;
+  polling = true;
+  try {
+    return await _pollIngest();
+  } finally {
+    polling = false;
+  }
+}
+
+async function _pollIngest() {
   const s = await api.ingestStatus();
   if (!s.url) { $('console').hidden = true; $('add-status').innerHTML = ''; return false; }
 
@@ -460,17 +474,23 @@ async function pollIngest() {
   return Boolean(s.running);
 }
 
+/** Poll until the run ends, rescheduling only once a tick has finished.
+ *
+ *  This was a `setInterval`, which fires whether or not the previous tick has
+ *  returned. Each tick makes three or four requests, so ticks overlapped
+ *  routinely — and because `pumpLog` reads `logCursor`, awaits, and only then
+ *  writes it back, two overlapping polls both read the stale cursor and both
+ *  appended the same batch. Every log line could appear twice. */
 async function watchIngest() {
-  clearInterval(ingestTimer);
+  clearTimeout(ingestTimer);
   const tick = async () => {
     const running = await pollIngest();
     // the queue grows as tracks land, so refresh it alongside the progress —
     // but never disturb the track being edited
     await loadQueue({ keepDetail: true });
-    if (!running) clearInterval(ingestTimer);
+    if (running) ingestTimer = setTimeout(tick, 1000);
   };
   await tick();
-  ingestTimer = setInterval(tick, 1000);
 }
 
 // debounced: a keystroke per request would hammer sqlite on a 2,000-row library
@@ -663,5 +683,6 @@ addEventListener('keydown', (e) => {
   else if (e.key === 'Enter' && !TYPING.has(e.target.tagName)) { e.preventDefault(); acceptCurrent(); }
 });
 
-loadQueue();
-pollIngest();
+await loadQueue();
+// one poll on load; it keeps going only if a run is already in progress
+watchIngest();
