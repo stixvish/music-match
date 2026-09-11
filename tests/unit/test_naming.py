@@ -69,3 +69,61 @@ def test_filename():
 
 def test_filename_is_path_safe():
   assert "/" not in naming.filename("AC/DC", "Back/Black")
+
+
+# --- artist credit formatting (SPEC.md §14) --------------------------------
+
+
+@pytest.mark.parametrize(
+  ("artists", "expected"),
+  [
+    (["Pitbull"], "Pitbull"),
+    (["Lost Frequencies", "Calum Scott"], "Lost Frequencies & Calum Scott"),
+    (
+      ["David Guetta", "Bebe Rexha", "Brooks"],
+      "David Guetta, Bebe Rexha & Brooks",
+    ),
+    (
+      ["Metro Boomin", "A$AP Rocky", "Roisee", "Someone"],
+      "Metro Boomin, A$AP Rocky, Roisee & Someone",
+    ),
+    ([], ""),
+    (["", "  "], ""),
+    (["A", "", "B"], "A & B"),
+  ],
+)
+def test_format_artists(artists, expected):
+  assert naming.format_artists(artists) == expected
+
+
+def test_two_artists_collapse_to_ampersand():
+  """The 2-artist rule falls out of the serial-comma rule, not a special case."""
+  assert naming.format_artists(["A", "B"]) == "A & B"
+
+
+def test_credit_order_is_preserved_not_sorted():
+  assert naming.format_artists(["Zebra", "Aardvark"]) == "Zebra & Aardvark"
+
+
+@pytest.mark.parametrize(
+  ("raw", "expected"),
+  [
+    ("Alesso; Tove Lo", ["Alesso", "Tove Lo"]),
+    ("Macklemore, Ryan Lewis", ["Macklemore", "Ryan Lewis"]),
+    ("PARTYNEXTDOOR & Drake", ["PARTYNEXTDOOR", "Drake"]),
+    (
+      "Atif Aslam, Sunidhi Chauhan & Pritam",
+      ["Atif Aslam", "Sunidhi Chauhan", "Pritam"],
+    ),
+    ("Pitbull", ["Pitbull"]),
+    ("", []),
+  ],
+)
+def test_split_artists_is_liberal_on_read(raw, expected):
+  """Input tags are inconsistent; reading must accept every convention."""
+  assert naming.split_artists(raw) == expected
+
+
+def test_read_then_write_normalises_any_input_convention():
+  for raw in ["Alesso; Tove Lo", "Alesso, Tove Lo", "Alesso & Tove Lo"]:
+    assert naming.format_artists(naming.split_artists(raw)) == "Alesso & Tove Lo"

@@ -14,6 +14,7 @@ conflate the two.
 
 import re
 import unicodedata
+from collections.abc import Sequence
 
 # "feat.", "featuring", "ft" -> "ft."
 _FEAT = re.compile(r"\b(?:feat\.?|featuring|ft\.?)\s+", re.IGNORECASE)
@@ -31,6 +32,8 @@ _MIX_DASH = re.compile(
 )
 _FEAT_GROUP = re.compile(r"[\(\[]\s*ft\.\s*([^)\]]+)\s*[\)\]]", re.IGNORECASE)
 _ILLEGAL = re.compile(r"[/:\x00-\x1f]")
+# liberal on read: every separator seen in real tags
+_ARTIST_SPLIT = re.compile(r"\s*(?:;|&|,| x |\bvs\.?\b|\band\b)\s*", re.IGNORECASE)
 _SPACES = re.compile(r"\s+")
 
 
@@ -99,6 +102,55 @@ def safe_component(raw: str) -> str:
   if set(text) <= {"."}:
     return "unknown"
   return text[:120].strip() or "unknown"
+
+
+def format_artists(artists: Sequence[str]) -> str:
+  """Render a credited-artist list in house style (SPEC.md §14).
+
+  One rule, serial-comma form::
+
+      ["A"]           -> "A"
+      ["A", "B"]      -> "A & B"
+      ["A", "B", "C"] -> "A, B & C"
+
+  Two artists collapse to `A & B` naturally, so this is a single rule rather
+  than a special case. It matches MusicBrainz's and Apple's own convention.
+
+  Order comes from the catalogue's artist credit, primary first — never
+  alphabetical.
+
+  This covers *credited* artists only. Featured artists live in the title as
+  `(ft. X)` and are never merged into this list.
+
+  Args:
+    artists: Credited artists, primary first.
+
+  Returns:
+    The formatted credit.
+  """
+  names = [a.strip() for a in artists if a and a.strip()]
+  if not names:
+    return ""
+  if len(names) == 1:
+    return names[0]
+  return f"{', '.join(names[:-1])} & {names[-1]}"
+
+
+def split_artists(raw: str) -> list[str]:
+  """Parse an artist string written in any convention we have encountered.
+
+  Input tags are inconsistent — the existing library uses `;` on 427 tracks,
+  `&` on 50 and `,` on 46, sometimes mixed in one string. Reading must be
+  liberal even though writing is strict.
+
+  Args:
+    raw: An artist tag or credit line.
+
+  Returns:
+    Individual artist names, order preserved.
+  """
+  parts = _ARTIST_SPLIT.split(raw or "")
+  return [p.strip() for p in parts if p and p.strip()]
 
 
 def filename(artist: str, title: str, suffix: str = ".aiff") -> str:

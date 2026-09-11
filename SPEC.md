@@ -540,6 +540,8 @@ behaves the same in Finder, Rekordbox and Serato:
 | Rule | Example |
 |---|---|
 | Features use **`ft.`**, never `feat.`, in parentheses | `Mood (ft. iann dior)` |
+| Credited artists: commas, then `&` before the last | `David Guetta, Bebe Rexha & Brooks` |
+| Two credited artists therefore read as `A & B` | `Lost Frequencies & Calum Scott` |
 | Remixes and edits use **square brackets** | `Delilah [Tom Santa Remix]` |
 | Both may co-occur, features first | `Title (ft. Guest) [Someone Remix]` |
 | Mix/remix designation is never dropped | — |
@@ -548,6 +550,22 @@ behaves the same in Finder, Rekordbox and Serato:
 > normalisation strips everything down to bare artist/title so sources can be
 > matched. This is *canonical output* formatting, applied after arbitration to
 > whatever the winning source returned. One is for machines, one is for you.
+
+**Liberal on read, strict on write.** Input tags are inconsistent — the
+existing library uses `;` on 427 tracks, `&` on 50 and `,` on 46, sometimes
+mixed in a single string (`Atif Aslam, Sunidhi Chauhan & Pritam`). Parsing
+accepts all of them; output always uses the serial-comma form above.
+
+The `A, B & C` rule is one rule, not two: with two artists it collapses to
+`A & B` on its own. Order comes from the catalogue's artist credit, primary
+first — never alphabetical. It covers **credited** artists only; featured
+artists stay in the title as `(ft. X)` and are never merged in.
+
+> Known limitation: an artist whose *name* contains a comma — "Tyler, The
+> Creator" — makes the written form ambiguous to re-parse. There are none in
+> the current library, and it does not matter in practice because the database
+> is the source of truth and we never re-parse our own output. It would only
+> surface via `music add` on an already-published file.
 
 Filesystem-illegal characters (`/`, `:`) are replaced; the tag keeps the true
 value. If two tracks collide on path, a ` (2)` suffix is appended and both are
