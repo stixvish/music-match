@@ -17,6 +17,11 @@ dev = ["ruff", "mypy", "pytest", "pytest-cov"]
 # essentia-tensorflow is heavy (~120 MB) and only needed for classify.
 classify = ["essentia-tensorflow"]
 
+[tool.hatch.build.targets.wheel]
+packages = ["src/music"]
+# schema.sql must ship inside the wheel, not just the source tree
+artifacts = ["src/music/db/schema.sql"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
