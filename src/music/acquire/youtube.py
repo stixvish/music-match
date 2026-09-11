@@ -54,15 +54,42 @@ class Download:
 
 
 def _base_opts(cfg: YouTubeConfig) -> dict[str, object]:
-  return {
-    "format": cfg.format_chain,
-    "quiet": True,
-    "no_warnings": True,
-    "noprogress": True,
-    # itag 141 is served only to the web_music client with premium cookies.
-    "extractor_args": {"youtube": {"player_client": [cfg.player_client]}},
-    "cookiesfrombrowser": (cfg.cookie_browser,),
-  }
+  """Build yt-dlp options with full CLI parity.
+
+  Options are derived from yt-dlp's own argument parser rather than assembled
+  by hand, so CLI defaults such as `js_runtimes` are inherited.
+
+  Two things are required for the premium formats (itag 141/774) to appear at
+  all, and both fail silently:
+
+  1. `deno` on PATH, plus the `yt-dlp-ejs` package, which together solve
+     YouTube's javascript "n" challenge. The brew CLI bundles `yt-dlp-ejs`;
+     a plain `pip install yt-dlp` does not. Without it yt-dlp reports
+     "Only images are available for download".
+  2. Authenticated premium cookies, for the web_music client.
+
+  Symptom of either: "Requested format is not available" from the library on
+  a video the CLI downloads fine.
+
+  Args:
+    cfg: YouTube settings.
+
+  Returns:
+    An options dict suitable for `yt_dlp.YoutubeDL`.
+  """
+  parsed = yt_dlp.parse_options(
+    [
+      "--cookies-from-browser",
+      cfg.cookie_browser,
+      "--extractor-args",
+      f"youtube:player_client={cfg.player_client}",
+      "--format",
+      cfg.format_chain,
+    ]
+  )
+  opts = dict(parsed.ydl_opts)
+  opts.update({"quiet": True, "no_warnings": True, "noprogress": True})
+  return opts
 
 
 def enumerate_playlist(url: str, cfg: YouTubeConfig) -> list[VideoRef]:
