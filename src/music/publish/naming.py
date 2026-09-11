@@ -201,9 +201,13 @@ def _is_person(text: str, version_word: str) -> bool:
     return False
   if re.fullmatch(r"[\d\s'\u2019-]+", candidate):
     return False
-  if version_word.casefold() == "version" and re.search(r"['’]s$", candidate):
-    return False
-  return True
+  # a bare year ("2019 Edit") is not a person; a leading digit is fine,
+  # "808 BEACH" is a real artist.
+  # "Taylor's Version" is a re-recording by the original artist, not a remix.
+  possessive_version = version_word.casefold() == "version" and bool(
+    re.search(r"['\u2019]s$", candidate)
+  )
+  return not possessive_version
 
 
 def format_artists(artists: Sequence[str]) -> str:
