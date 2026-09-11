@@ -45,12 +45,12 @@
 
 ## phase 2 — acquisition is real
 
-- [ ] **t12** format chain `141/774/140/251`, `web_music` client, browser cookies
-- [ ] **t13** quality gate: hard-fail <256 kbps
-- [ ] **t14** `music doctor`: ffmpeg, yt-dlp, cookies, models, disk space
-- [ ] **t15** playlist enumeration
-- [ ] **t16** pre-download dedup on `video_id`
-- [ ] **t17** art-track preference + music-video detection (§8 signal table)
+- [x] **t12** format chain `141/774/140/251`, `web_music` client, browser cookies
+- [x] **t13** quality gate: hard-fail <256 kbps
+- [x] **t14** `music doctor`: ffmpeg, yt-dlp, cookies, models, disk space
+- [x] **t15** playlist enumeration
+- [x] **t16** pre-download dedup on `video_id`
+- [x] **t17** art-track preference + music-video detection (§8 signal table)
 - [ ] **cp3** 20-track playlist: all ≥256 kbps, re-run downloads nothing, a known
   music-video url is flagged
 
