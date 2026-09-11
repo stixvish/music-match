@@ -35,12 +35,13 @@
 - [x] **t10** cache + rate limit + backoff
   - accept: second identical lookup makes zero http calls
   - verify: unit test counts calls; backoff test simulates 503
-- [ ] **t11** confidence scoring (§12), pure
+- [x] **t11** confidence scoring (§12), pure
   - accept: table from §12 reproduced exactly; version-variant guard penalises
     `(instrumental)` when unrequested
   - verify: unit tests per row; the `SMASH!` case is a regression test
-- [ ] **cp2** **go/no-go** — 100-track stratified sample, measure high-confidence
-  rate. ≥75% proceed · 65–75% proceed + revise §9 · <65% stop and rethink
+- [>] **cp2** **go/no-go** — measured **61.5%** (96 tracks, musicbrainz only,
+  pre-redownload audio). gate as written says stop and rethink. see
+  `tasks/cp2-results.md` — the threshold placement is itself in question.
 
 ## phase 2 — acquisition is real
 
