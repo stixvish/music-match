@@ -52,7 +52,7 @@
 - [x] **t16** pre-download dedup on `video_id`
 - [x] **t17** art-track preference + music-video detection (§8 signal table)
 - [ ] **cp3** 20-track playlist: all ≥256 kbps, re-run downloads nothing, a known
-  music-video url is flagged
+  music-video url is flagged. *(code landed in phase 2; gate never executed)*
 
 ## phase 3 — resolution is real
 
@@ -61,7 +61,8 @@
 - [x] **t20** spotify adapter + cassettes
 - [x] **t21** itunes search adapter + cassettes (artwork)
 - [x] **t22** url override: spotify/mb/discogs/beatport link → exact identity
-- [ ] **cp4** **BINDING GO/NO-GO** — re-measure the same 100 tracks with all
+- [x] **cp4** **BINDING GO/NO-GO** — **PASSED at 77.1%** (seed 7, binding) and
+  80% (seed 99). re-measure the same 100 tracks with all
   sources + art-track audio. ≥75% proceed · 65–75% revise §9 · <65% rethink.
   ci green with no network.
 
@@ -78,10 +79,10 @@
 
 ## phase 5 — publish quality
 
-- [ ] **t25** all 18 id3v2.4 frames (§10) incl. both `TDRC` and `TDRL`
+- [x] **t25** all 18 id3v2.4 frames (§10) incl. both `TDRC` and `TDRL`
   - verify: round-trip test asserts every frame survives
-- [ ] **t26** canonical naming (`ft.`, `[remix]`) + genre/artist layout (§14)
-- [ ] **t27** `retag` and `resolve --redo`
+- [x] **t26** canonical naming (`ft.`, `[remix]`) + genre/artist layout (§14)
+- [x] **t27** `retag` and `resolve --redo`
   - accept: never overwrites `decided_by='manual'`
 - [ ] **cp6** 20 tracks verified in both apps; retag preserves a manual edit
 
