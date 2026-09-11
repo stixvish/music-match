@@ -1,10 +1,11 @@
-"""Validate spec.md self-consistency.
+"""Validate SPEC.md self-consistency.
 
 Dangling section references have shipped twice and a mangled heading once;
-this runs in CI to stop the third. See spec.md §20.
+this runs in CI to stop the third. See SPEC.md §20.
 """
 
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -18,7 +19,7 @@ STALE = [
 
 def main() -> int:
   """Check headings, cross-references and known-stale claims."""
-  spec = Path(__file__).resolve().parent.parent / "spec.md"
+  spec = Path(__file__).resolve().parent.parent / "SPEC.md"
   text = spec.read_text(encoding="utf-8")
   errors = []
 
@@ -41,10 +42,39 @@ def main() -> int:
     ):
       errors.append(f"heading may be mangled: {line!r}")
 
+  errors.extend(_case_mismatches())
+
   for e in errors:
     print(f"check_spec: {e}", file=sys.stderr)
   print("check_spec: ok" if not errors else f"check_spec: {len(errors)} problem(s)")
   return 1 if errors else 0
+
+
+def _case_mismatches() -> list[str]:
+  """Find references to tracked files that use the wrong case.
+
+  macOS is case-insensitive, so a mis-cased path resolves happily on a developer
+  machine and then fails on a Linux CI runner. This has already happened once.
+  Returns a list of human-readable problems.
+  """
+  out = subprocess.run(
+    ["git", "ls-files"], capture_output=True, text=True, check=False
+  ).stdout.split()
+  tracked = {f.lower(): f for f in out}
+  pattern = re.compile(r"[A-Za-z0-9_./-]+\.(?:md|py|toml|yml|yaml|sql)")
+  problems = []
+  for path in out:
+    if path.startswith(".claude"):
+      continue
+    try:
+      text = Path(path).read_text(encoding="utf-8")
+    except OSError, UnicodeDecodeError:
+      continue
+    for ref in sorted(set(pattern.findall(text))):
+      actual = tracked.get(ref.lower())
+      if actual and actual != ref:
+        problems.append(f"{path}: refers to {ref!r}, tracked as {actual!r}")
+  return problems
 
 
 if __name__ == "__main__":

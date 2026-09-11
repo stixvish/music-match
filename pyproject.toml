@@ -46,7 +46,7 @@ warn_unused_ignores = true
 warn_redundant_casts = true
 warn_return_any = true
 
-# pure modules are held to a stricter bar; see spec.md §19
+# pure modules are held to a stricter bar; see SPEC.md §19
 [[tool.mypy.overrides]]
 module = ["music.normalise", "music.arbitrate", "music.identify", "music.publish.naming"]
 disallow_untyped_defs = true
@@ -55,12 +55,12 @@ strict_equality = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [
-  "live: hits real networks/models. excluded from ci (spec.md §19)",
+  "live: hits real networks/models. excluded from ci (SPEC.md §19)",
   "slow: seconds, not milliseconds",
 ]
 
 [tool.coverage.report]
-# hard gate applies to pure modules only; see spec.md §19.
+# hard gate applies to pure modules only; see SPEC.md §19.
 # each is added here as it is built (tasks/todo.md t8, t11, t24, t26).
 include = ["src/music/cli.py"]
 fail_under = 0

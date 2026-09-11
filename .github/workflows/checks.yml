@@ -27,7 +27,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
-      # ffmpeg synthesizes test audio; no binaries are committed (spec.md §19)
+      # ffmpeg synthesizes test audio; no binaries are committed (SPEC.md §19)
       - run: sudo apt-get update && sudo apt-get install -y ffmpeg
       - run: uv sync
       - run: uv run pytest -m "not live" --cov=src/music --cov-report=term-missing

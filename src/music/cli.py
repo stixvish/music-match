@@ -1,4 +1,4 @@
-"""Command-line entry points (spec.md §18)."""
+"""Command-line entry points (SPEC.md §18)."""
 
 
 def main() -> int:

@@ -1,9 +1,9 @@
 # implementation plan
 
-companion to `spec.md`. the spec says *what* and *why*; this says *in what
+companion to `SPEC.md`. the spec says *what* and *why*; this says *in what
 order* and *how we know it worked*.
 
-## the departure from spec.md §16
+## the departure from SPEC.md §16
 
 **§16's milestones are horizontal** — build the schema, then the downloader,
 then resolution, then tagging. that ordering defers every integration question
@@ -114,4 +114,4 @@ code looks right".
 
 ## pr policy
 
-one pr per phase (`claude.md`). small commits within the branch.
+one pr per phase (`CLAUDE.md`). small commits within the branch.
