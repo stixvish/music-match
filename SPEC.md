@@ -922,6 +922,39 @@ Empty directories are swept after a retag pass. On macOS this needs
 displays, so a folder emptied of music is essentially never empty on disk, and
 a naive `rmdir` prunes nothing at all.
 
+### the hybrid title, and how well it reproduces a human
+
+The title is assembled from two sources rather than taken from one: **Spotify
+supplies the base** — it wins `title` outside electronic — and **MusicBrainz
+supplies the guests**, being the only source that distinguishes a feature from
+a collaboration. House style is then applied on the way to the file: `ft.` in
+parentheses, remixes in brackets, ASCII quotes, contractions repaired, film
+provenance removed.
+
+Measured against the strongest available benchmark — the titles the user had
+already corrected by hand — the pipeline now reproduces **11 of 12**, up from 6
+before this work. That is the honest test: not whether the output looks
+plausible, but whether it matches what a person who knows the music typed.
+
+The one remaining difference is not a formatting problem. Khalid's `Eleven`
+resolves to the solo cut because AcoustID matched the solo recording, and
+MusicBrainz, iTunes and Spotify all describe it correctly — three sources agree
+on the wrong *recording*. Nothing in title assembly can fix that; a pasted link
+settles it in seconds.
+
+### film provenance is not a title
+
+Indian film catalogues append the film to the track name: `Jag Ghoomeya (From
+"Sultan")`, `Ghungroo (From "War")`. 11 of 120 tracks arrived this way and every
+one had been stripped by hand. The film is already carried by the album field,
+so the suffix is removed in `canonical_title`.
+
+The pattern is deliberately narrow — it must name a *work*, either quoted or
+introduced by "the motion picture / film / series / soundtrack". A blanket
+"trailing bracket starting with From" rule also eats `Title (From Another
+Angle)`, and a missed strip is cosmetic where a wrong one destroys a real
+title.
+
 ### the guest outlives the title that dropped it
 
 Spotify leads `title` outside electronic and routinely omits the featured

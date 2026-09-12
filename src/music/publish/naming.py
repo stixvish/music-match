@@ -31,6 +31,23 @@ _MIX_DASH = re.compile(
   r"[^-–]*)$",
   re.IGNORECASE,
 )
+# A trailing `(From "Film")` / `[From the Motion Picture ...]`. Indian film
+# catalogues append the film to the track title; it is provenance, not part of
+# the name, and the film is already carried by the album field. 11 of 120
+# tracks arrived with one and every one was stripped by hand before this.
+# Deliberately narrow. It must look like a *work* is being named — a quoted
+# title, or "the motion picture / film / series / soundtrack" — because a
+# missed strip is cosmetic while a wrong one destroys a real title:
+# `Title (From Another Angle)` is a parenthetical, not provenance.
+_FROM_SUFFIX = re.compile(
+  r"""\s*[\(\[]\s*from\s+
+      (?: ["\u201c\u2018'].*?
+        | the\s+(?:motion\s+picture|film|movie|series|soundtrack|album)\b.*?
+      )
+      \s*[\)\]]\s*$""",
+  re.IGNORECASE | re.VERBOSE,
+)
+
 _FEAT_GROUP = re.compile(r"[\(\[]\s*ft\.\s*([^)\]]+)\s*[\)\]]", re.IGNORECASE)
 _ILLEGAL = re.compile(r"[/:\x00-\x1f]")
 # liberal on read: every separator seen in real tags
@@ -104,6 +121,12 @@ def canonical_title(raw: str) -> str:
   text = _SPACES.sub(" ", fix_contractions(asciify_quotes(raw)).strip())
   if not text:
     return ""
+  # strip repeatedly: "Title (Title Track) [From "Film"]" carries both
+  while True:
+    stripped = _FROM_SUFFIX.sub("", text).strip()
+    if stripped == text or not stripped:
+      break
+    text = stripped
 
   mix = ""
   match = _MIX.search(text)

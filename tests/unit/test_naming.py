@@ -214,3 +214,38 @@ def test_a_title_cased_contraction_is_repaired(given, want):
 def test_a_name_is_not_a_contraction(name):
   """The suffix list is explicit because a blanket rule destroys these."""
   assert naming.canonical_title(name) == name
+
+
+# --- soundtrack provenance in the title ------------------------------------
+
+
+@pytest.mark.parametrize(
+  ("given", "want"),
+  [
+    ('Jag Ghoomeya (From "Sultan")', "Jag Ghoomeya"),
+    ('Ghungroo (From "War")', "Ghungroo"),
+    (
+      'Hamari Adhuri Kahani (Title Track) [From "Hamari Adhuri Kahani"]',
+      "Hamari Adhuri Kahani (Title Track)",
+    ),
+    ("Lose Yourself (From the Motion Picture 8 Mile)", "Lose Yourself"),
+    ("Flashlight (From “Pitch Perfect 2” Soundtrack)", "Flashlight"),
+  ],
+)
+def test_a_film_suffix_is_provenance_not_title(given, want):
+  """Indian film catalogues append the film to the track name.
+
+  It is not part of the title and the film is already carried by the album
+  field. 11 of 120 tracks arrived with one, and every one was stripped by hand
+  before this existed.
+  """
+  assert naming.canonical_title(given) == want
+
+
+@pytest.mark.parametrize(
+  "title",
+  ["From Me To You", "Title (From Another Angle)", "Coming From Where I'm From"],
+)
+def test_an_ordinary_from_is_left_alone(title):
+  """Narrow on purpose: a missed strip is cosmetic, a wrong one is destructive."""
+  assert naming.canonical_title(title) == title
