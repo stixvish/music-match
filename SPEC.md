@@ -1211,6 +1211,34 @@ return **422 with the reason** rather than a silent success. The track keeps
 its place in the review list with the stale reason cleared, since accepting it
 is still the user's call.
 
+### the PO token warning, and why it is not yet a problem
+
+yt-dlp 2026.08.19 warns on every fetch:
+
+```
+web_music client https formats require a GVS PO Token which was not provided.
+They will be skipped as they may yield HTTP Error 403.
+```
+
+`web_music` is the client §4 chose in order to get itag 141, so a skipped
+format would drop the run to itag 140 at 128 kbps — below the bitrate floor,
+and every track would fail.
+
+It does not, because **a GVS PO Token is not required for YouTube Premium
+subscribers** (yt-dlp PO-Token-Guide, read 2026-09-12). Measured the same day:
+6 of 6 downloads returned itag 141 at 258 kbps. The warning is generic; the
+exemption is real.
+
+That exemption is outside our control, so `music doctor` now downloads one
+short track and reports the itag and bitrate it actually received. A
+pre-flight check is the right place for a dependency on somebody else's
+policy — the alternative is discovering it three hours into a 2,329-track run.
+`--offline` skips it.
+
+If it ever does change, the options are a PO token provider plugin
+(`bgutil-ytdlp-pot-provider`) or a client that needs no token (`android_vr`,
+`web_embedded`), both at some cost to available formats.
+
 ### cookies are extracted once per run
 
 `--cookies-from-browser chrome` was passed on every yt-dlp call, so the browser

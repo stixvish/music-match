@@ -274,7 +274,7 @@ def _reset_counts(cfg: config.Config) -> dict[str, int] | None:
   return {"tracks": one, "manual": manual, "answers": answers}
 
 
-def cmd_doctor(args: argparse.Namespace) -> int:  # noqa: ARG001
+def cmd_doctor(args: argparse.Namespace) -> int:
   """Check that the environment can actually run a job (SPEC.md §18)."""
   cfg = config.load()
   ok = True
@@ -290,8 +290,52 @@ def cmd_doctor(args: argparse.Namespace) -> int:  # noqa: ARG001
   free_gb = shutil.disk_usage(Path.home()).free / 1024**3
   print(f"  free disk  {free_gb:.0f} GB (library needs ~80 GB)")
   ok &= free_gb > 100
+
+  if not args.offline:
+    ok &= _check_premium_audio(cfg)
+
   print("  ok" if ok else "  problems found")
   return 0 if ok else 1
+
+
+# a short, stable, licensed art track used only to confirm the account still
+# gets premium formats. nothing about it is kept.
+PROBE_VIDEO = "u9W7FC0D-kg"
+
+
+def _check_premium_audio(cfg: config.Config) -> bool:
+  """Confirm the account still receives the premium audio format.
+
+  yt-dlp now warns that `web_music` https formats require a GVS PO Token and
+  "will be skipped". They are not skipped for a YouTube Premium subscriber —
+  the token requirement does not apply — which is why itag 141 still arrives
+  at ~256 kbps. That exemption is outside our control, so it is checked before
+  a multi-hour run rather than discovered part way through it.
+
+  The symptom if it ever changes is a downgrade to itag 140 at 128 kbps, which
+  `download` already rejects against the bitrate floor.
+
+  Args:
+    cfg: Runtime configuration.
+
+  Returns:
+    True if the probe came back at or above the floor.
+  """
+  import tempfile
+
+  from music.acquire import download, refresh_cookies
+
+  refresh_cookies()
+  with tempfile.TemporaryDirectory() as tmp:
+    try:
+      item = download(PROBE_VIDEO, Path(tmp), cfg.youtube)
+    except Exception as exc:  # noqa: BLE001 - this is the diagnostic
+      print(f"  premium audio  FAILED — {str(exc)[:90]}")
+      return False
+  good = item.abr >= cfg.youtube.min_bitrate_kbps
+  verdict = "ok" if good else f"BELOW THE {cfg.youtube.min_bitrate_kbps} kbps FLOOR"
+  print(f"  premium audio  itag {item.itag} at {item.abr:.0f} kbps ({verdict})")
+  return good
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -347,6 +391,11 @@ def build_parser() -> argparse.ArgumentParser:
   reset.set_defaults(func=cmd_reset)
 
   doctor = sub.add_parser("doctor", help="check tools, credentials and disk")
+  doctor.add_argument(
+    "--offline",
+    action="store_true",
+    help="skip the download probe that confirms premium audio",
+  )
   doctor.set_defaults(func=cmd_doctor)
   return parser
 

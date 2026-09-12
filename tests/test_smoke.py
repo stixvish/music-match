@@ -27,3 +27,9 @@ def test_serve_reloads_by_default():
   args = cli.build_parser().parse_args(["serve"])
   assert args.no_reload is False
   assert cli.build_parser().parse_args(["serve", "--no-reload"]).no_reload is True
+
+
+def test_doctor_can_skip_the_download_probe():
+  """The probe needs the network and an authenticated browser; CI has neither."""
+  assert cli.build_parser().parse_args(["doctor"]).offline is False
+  assert cli.build_parser().parse_args(["doctor", "--offline"]).offline is True
