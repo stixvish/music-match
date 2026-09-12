@@ -81,3 +81,77 @@ def test_unknown_field_is_rejected():
   except KeyError:
     return
   raise AssertionError("expected KeyError for an unmapped field")
+
+
+# --- frames belonging to other tools must survive a rewrite ---------------
+
+
+def test_serato_analysis_survives_a_retag(synth_audio, tmp_path):
+  """Serato stores beatgrids and cue points in GEOB frames inside the ID3 tag.
+
+  A naive delete-then-write destroys them. Verified on real library files that
+  already carried Serato BeatGrid, Markers2, Autotags and Overview (cp6).
+  """
+  from mutagen.aiff import AIFF
+  from mutagen.id3 import GEOB
+
+  out = transcode.to_aiff(synth_audio, tmp_path / "serato.aiff")
+  tags = tag.Tags()
+  tags["title"] = "Original"
+  tag.write(out, tags)
+
+  audio = AIFF(str(out))
+  audio.tags.add(
+    GEOB(
+      encoding=0,
+      mime="application/octet-stream",
+      desc="Serato BeatGrid",
+      data=b"BEATGRID-DATA",
+    )
+  )
+  audio.tags.add(
+    GEOB(
+      encoding=0,
+      mime="application/octet-stream",
+      desc="Serato Markers2",
+      data=b"CUE-DATA",
+    )
+  )
+  audio.save(v2_version=4)
+
+  # a full rewrite, as `music retag` performs
+  updated = tag.read(out)
+  updated["title"] = "Changed"
+  tag.write(out, updated)
+
+  after = AIFF(str(out))
+  assert "GEOB:Serato BeatGrid" in after.tags
+  assert "GEOB:Serato Markers2" in after.tags
+  assert after.tags["GEOB:Serato BeatGrid"].data == b"BEATGRID-DATA"
+  assert tag.read(out)["title"] == "Changed"
+
+
+def test_owned_frames_are_replaced_not_duplicated(synth_audio, tmp_path):
+  out = transcode.to_aiff(synth_audio, tmp_path / "dup.aiff")
+  first = tag.Tags()
+  first["genre"] = "House"
+  tag.write(out, first)
+  second = tag.Tags()
+  second["genre"] = "Techno"
+  tag.write(out, second)
+  assert tag.read(out)["genre"] == "Techno"
+
+
+def test_unknown_third_party_frames_survive(synth_audio, tmp_path):
+  """Anything we do not write belongs to another tool."""
+  from mutagen.aiff import AIFF
+  from mutagen.id3 import TXXX
+
+  out = transcode.to_aiff(synth_audio, tmp_path / "third.aiff")
+  tag.write(out, tag.Tags())
+  audio = AIFF(str(out))
+  audio.tags.add(TXXX(encoding=3, desc="SomeOtherTool", text=["keep me"]))
+  audio.save(v2_version=4)
+
+  tag.write(out, tag.Tags())
+  assert AIFF(str(out)).tags["TXXX:SomeOtherTool"].text == ["keep me"]

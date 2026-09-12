@@ -49,6 +49,9 @@ docs(spec): record opus vs aac spectral measurement
   before writing it into the spec.
 - **every claim in `SPEC.md` cites its evidence.** if it cannot be cited, mark
   it as projected.
+- **never destroy another tool's data.** rekordbox and serato write into the
+  same id3 tag we do; serato keeps beatgrids and cue points in `GEOB` frames.
+  any code that rewrites a tag must preserve frames it does not own.
 - **no secrets in the repo, ever.** no cookie files, no tokens. runtime config
   lives in `~/.config/musicpipeline/`. see `SPEC.md` §13.
 - push back when an approach has a real problem; do not agree by default.

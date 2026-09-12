@@ -1,37 +1,98 @@
 """Publish: transcode, tag, name and file a finished track (SPEC.md §14)."""
 
+import logging
 import sqlite3
 from pathlib import Path
 
-from music.publish import naming, tag, transcode
+from music.publish import fields, naming, tag, transcode
 
-__all__ = ["layout_path", "publish_track", "naming", "tag", "transcode"]
+log = logging.getLogger(__name__)
 
-# six families (SPEC.md §7). unknown genres land in `other`.
-FAMILIES = ("electronic", "hip-hop", "pop", "r&b-soul", "world", "other")
+# track ids whose cover was replaced by the most recent retag pass, so the
+# cli can say so instead of reporting a silent success.
+_REFRESHED: set[int] = set()
 
 
-def layout_path(library: Path, family: str, artist: str, title: str) -> Path:
+def refreshed_artwork() -> set[int]:
+  """Tracks whose embedded cover was replaced since the last reset.
+
+  Returns:
+    The track ids.
+  """
+  return set(_REFRESHED)
+
+
+def reset_refreshed() -> None:
+  """Clear the record, at the start of a retag pass."""
+  _REFRESHED.clear()
+
+
+__all__ = [
+  "fetch_artwork",
+  "fields",
+  "layout_path",
+  "naming",
+  "prune_empty",
+  "publish_track",
+  "refreshed_artwork",
+  "reset_refreshed",
+  "retag",
+  "sweep_empty",
+  "tag",
+  "transcode",
+]
+
+
+def layout_path(library: Path, artist: str, title: str) -> Path:
   """Build the output path.
 
-  `library/<genre-family>/<artist>/<Artist> - <Title>.aiff`
+  `library/<Artist> - <Title>.aiff` — one flat directory.
+
+  Nesting was tried two ways and both lost to real data (SPEC.md §14). By
+  *genre family*, the folder was a second job for a value that exists to select
+  a precedence table, and correcting a genre meant moving the file. By
+  *artist*, collaborations shatter a performer's catalogue: Arijit Singh
+  occupies ten folders in a 120-track library, including both
+  `Antara Mitra & Arijit Singh` and `Arijit Singh & Antara Mitra`.
+
+  Flat also means the path depends on the two fields least likely to be wrong,
+  so the resolver can keep improving without moving files around underneath
+  rekordbox and serato, which track by path.
 
   Args:
     library: Library root.
-    family: Genre family; anything unrecognised becomes `other`.
     artist: Artist name.
     title: Track title.
 
   Returns:
     Full destination path.
   """
-  safe_family = family if family in FAMILIES else "other"
-  return (
-    library
-    / safe_family
-    / naming.safe_component(artist)
-    / naming.filename(artist, title)
-  )
+  return library / naming.filename(artist, title)
+
+
+def fetch_artwork(url: str, timeout: int = 20) -> bytes | None:
+  """Download cover art.
+
+  iTunes serves the highest-quality artwork of the free sources (§7), and its
+  URLs are rewritten to full size before they reach here.
+
+  Args:
+    url: Image URL.
+    timeout: Seconds to wait.
+
+  Returns:
+    Image bytes, or None if the fetch fails. Artwork is never worth failing a
+    publish over.
+  """
+  import urllib.request
+
+  try:
+    request = urllib.request.Request(url, headers={"User-Agent": "music-match/0.1"})
+    with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310
+      return bytes(response.read())
+  except Exception as exc:  # noqa: BLE001 - cosmetic, never fatal
+    log.debug("artwork fetch failed for %s: %s", url[:60], exc)
+    return None
 
 
 def resolved_tags(conn: sqlite3.Connection, track_id: int) -> tag.Tags:
@@ -44,14 +105,174 @@ def resolved_tags(conn: sqlite3.Connection, track_id: int) -> tag.Tags:
   Returns:
     Tags containing every resolved field that maps to a frame.
   """
-  tags = tag.Tags()
-  rows = conn.execute(
-    "SELECT field, value FROM resolved_field WHERE track_id = ?", (track_id,)
-  ).fetchall()
-  for row in rows:
-    if row["field"] in tag.FRAME_MAP and row["value"]:
-      tags[row["field"]] = row["value"]
-  return tags
+  return fields.build_for(conn, track_id).tags
+
+
+def retag(
+  conn: sqlite3.Connection, track_id: int, library: Path | None = None
+) -> Path | None:
+  """Rewrite an already-published file's tags from the database.
+
+  This is the payoff for treating the database as the source of truth: a better
+  resolver re-tags the library without re-downloading or re-transcoding
+  anything. Manual edits survive because arbitration never overwrote them
+  (SPEC.md §15).
+
+  The file is also renamed if canonical naming now produces a different name.
+
+  Args:
+    conn: Open connection.
+    track_id: Track to re-tag.
+    library: Library root; read from config when omitted.
+
+  Returns:
+    The file's path, or None if the track has not been published.
+  """
+  if library is None:
+    from music import config
+
+    library = config.load().paths.library
+  row = conn.execute(
+    "SELECT published_path, genre_family, artwork_url FROM track WHERE id = ?",
+    (track_id,),
+  ).fetchone()
+  if row is None or not row["published_path"]:
+    return None
+  path = Path(row["published_path"])
+  if not path.exists():
+    log.warning("published file missing, cannot retag: %s", path)
+    return None
+
+  built = fields.build_for(conn, track_id)
+  existing = tag.read(path)
+
+  # Refresh the cover when the resolved artwork points somewhere new. Retag
+  # used to keep whatever the file already had, unconditionally — so a cover
+  # corrected in the review ui was written to the database, reported as saved,
+  # and never reached the file. The url that produced the embedded image is
+  # recorded on the track, which is the only way to tell a changed cover from
+  # an unchanged one without re-downloading every image on every retag.
+  wanted = fields.load_resolved(conn, track_id).get("artwork_url", "")
+  if wanted and wanted != (row["artwork_url"] or ""):
+    fetched = fetch_artwork(wanted)
+    if fetched:
+      built.tags.artwork = fetched
+      conn.execute("UPDATE track SET artwork_url = ? WHERE id = ?", (wanted, track_id))
+      _REFRESHED.add(track_id)
+    else:
+      log.warning("could not fetch new artwork for track %s", track_id)
+  if existing.artwork and not built.tags.artwork:
+    built.tags.artwork = existing.artwork
+  tag.write(path, built.tags)
+
+  renamed = _rename_if_needed(conn, track_id, path, library, built.tags)
+  return renamed or path
+
+
+def _rename_if_needed(
+  conn: sqlite3.Connection,
+  track_id: int,
+  path: Path,
+  library: Path,
+  tags: tag.Tags,
+) -> Path | None:
+  """Move a published file if canonical naming now yields a different path.
+
+  The library root is passed in rather than derived from the file's own path:
+  a file still sitting in the old `<family>/<artist>/` tree is at a different
+  depth from one already flat, so deriving it climbs the wrong number of
+  levels. This is also what migrates the old layout — a retag relocates every
+  file and sweeps up the directories it empties.
+  """
+  artist = tags.values.get("artist")
+  title = tags.values.get("title")
+  if not artist or not title:
+    return None
+  target = layout_path(library, artist, title)
+  if target == path or target.exists():
+    return None
+  target.parent.mkdir(parents=True, exist_ok=True)
+  path.replace(target)
+  prune_empty(path.parent, library)
+  conn.execute(
+    "UPDATE track SET published_path = ?, updated_at = datetime('now') WHERE id = ?",
+    (str(target), track_id),
+  )
+  return target
+
+
+# Finder writes `.DS_Store` into every directory it displays, so a folder
+# emptied of music is almost never empty on disk. Treating these as absent is
+# what makes pruning work at all on macOS; they hold Finder view settings and
+# nothing else.
+IGNORABLE = frozenset({".DS_Store", ".localized"})
+
+
+def _is_vacant(directory: Path) -> bool:
+  """Whether a directory holds nothing but macOS metadata.
+
+  Args:
+    directory: Directory to inspect.
+
+  Returns:
+    True when it can be removed.
+  """
+  try:
+    return all(entry.name in IGNORABLE for entry in directory.iterdir())
+  except OSError:
+    return False
+
+
+def prune_empty(directory: Path, library: Path) -> int:
+  """Remove directories left empty by a move, up to but never including root.
+
+  Args:
+    directory: The directory the file came from.
+    library: Library root, which is never removed.
+
+  Returns:
+    How many directories were removed.
+  """
+  current = directory.resolve()
+  root = library.resolve()
+  removed = 0
+  while current != root and root in current.parents and _is_vacant(current):
+    parent = current.parent
+    try:
+      for entry in current.iterdir():
+        entry.unlink()
+      current.rmdir()
+    except OSError:
+      return removed
+    removed += 1
+    current = parent
+  return removed
+
+
+def sweep_empty(library: Path) -> int:
+  """Remove every vacant directory under the library.
+
+  A per-move prune only reaches the directory a file just left. Migrating a
+  whole library leaves siblings behind, so a pass is swept at the end.
+
+  Args:
+    library: Library root, which is never removed.
+
+  Returns:
+    How many directories were removed.
+  """
+  if not library.is_dir():
+    return 0
+  removed = 0
+  # deepest first, so a parent is considered only once its children are gone
+  for directory in sorted(
+    (p for p in library.rglob("*") if p.is_dir()),
+    key=lambda p: len(p.parts),
+    reverse=True,
+  ):
+    if directory.exists():
+      removed += prune_empty(directory, library)
+  return removed
 
 
 def publish_track(
@@ -88,7 +309,7 @@ def publish_track(
   artist = tags.values.get("artist", "unknown artist")
   title = tags.values.get("title", source.stem)
 
-  dest = layout_path(library, row["genre_family"] or "other", artist, title)
+  dest = layout_path(library, artist, title)
   # collisions are flagged rather than silently overwritten (SPEC.md §14).
   if dest.exists():
     dest = dest.with_name(f"{dest.stem} (2){dest.suffix}")
@@ -96,19 +317,25 @@ def publish_track(
   work = staging / f"{track_id}.aiff"
   transcode.to_aiff(source, work)
 
-  art = transcode.extract_artwork(source, staging / f"{track_id}.jpg")
-  if art:
-    tags.artwork = art.read_bytes()
-  # canonical form goes in the tag too, not just the filename (SPEC.md §14).
-  if "title" in tags:
-    tags["title"] = naming.canonical_title(tags["title"])
+  resolved = fields.load_resolved(conn, track_id)
+  art_url = resolved.get("artwork_url", "")
+  embedded_url = ""
+  if art_url:
+    tags.artwork = fetch_artwork(art_url)
+    if tags.artwork:
+      embedded_url = art_url
+  if not tags.artwork:
+    # fall back to whatever the downloaded file already carried
+    art = transcode.extract_artwork(source, staging / f"{track_id}.jpg")
+    if art:
+      tags.artwork = art.read_bytes()
   tag.write(work, tags)
 
   dest.parent.mkdir(parents=True, exist_ok=True)
   work.replace(dest)
   conn.execute(
-    "UPDATE track SET published_path=?, status='published',"
+    "UPDATE track SET published_path=?, status='published', artwork_url=?,"
     " updated_at=datetime('now') WHERE id=?",
-    (str(dest), track_id),
+    (str(dest), embedded_url, track_id),
   )
   return dest

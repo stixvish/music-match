@@ -10,6 +10,11 @@ pre-commit:
     types:
       glob: "*.py"
       run: uv run mypy src
+    tests:
+      # the suite runs in under a second; a commit with failing tests reached
+      # the remote once because nothing checked here.
+      glob: "*.py"
+      run: uv run pytest -q -m "not live"
     secrets:
       run: gitleaks protect --staged --no-banner
     spec:

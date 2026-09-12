@@ -13,6 +13,17 @@ from pathlib import Path
 CONFIG_HOME = Path.home() / ".config" / "musicpipeline"
 DEFAULT_CONFIG = CONFIG_HOME / "config.toml"
 
+# Every credential the pipeline knows about. A missing one disables its
+# source rather than failing the run (SPEC.md §13).
+CREDENTIAL_KEYS = (
+  "ACOUSTID_API_KEY",
+  "DISCOGS_TOKEN",
+  "SPOTIFY_CLIENT_ID",
+  "SPOTIFY_CLIENT_SECRET",
+  "BEATPORT_CLIENT_ID",
+  "BEATPORT_CLIENT_SECRET",
+)
+
 
 def _load_dotenv(path: Path) -> None:
   """Load KEY=VALUE pairs from a .env file into os.environ.
@@ -111,14 +122,19 @@ def load(config_path: Path | None = None, env_path: Path | None = None) -> Confi
     else Paths()
   )
 
+  # The environment wins, then `[credentials]` in the TOML. Both were always
+  # documented; only the first was ever implemented, so a user who followed the
+  # README and moved their keys to `~/.config/musicpipeline/config.toml` lost
+  # every optional source with no error — each one degrades silently by design.
+  #
+  # The TOML matters because `.env` is read from the *working directory*: the
+  # same command run from another folder would quietly lose its credentials.
+  from_toml = data.get("credentials", {})
+  if not isinstance(from_toml, dict):
+    from_toml = {}
   creds = {
-    k: os.environ[k]
-    for k in (
-      "ACOUSTID_API_KEY",
-      "DISCOGS_TOKEN",
-      "SPOTIFY_CLIENT_ID",
-      "SPOTIFY_CLIENT_SECRET",
-    )
-    if os.environ.get(k)
+    k: str(os.environ.get(k) or from_toml.get(k) or "")
+    for k in CREDENTIAL_KEYS
+    if os.environ.get(k) or from_toml.get(k)
   }
   return Config(youtube=yt, paths=paths, credentials=creds)

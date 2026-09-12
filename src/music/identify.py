@@ -5,12 +5,18 @@ list. If we are not confident which recording this is, none of its candidates
 are used and the track goes to review — it is never published on a guess.
 """
 
+import difflib
 import re
 from dataclasses import dataclass
 from enum import StrEnum
 
 # below this, nothing is written and the track goes to the review queue.
 AUTO_ACCEPT = 0.80
+
+# Confidence for an identity that independent catalogues corroborate. Below
+# ISRC (0.98) and a clean fingerprint (0.95), because agreement between two
+# text searches is weaker evidence than either — but well clear of review.
+CORROBORATED = 0.90
 
 # a matched title that adds one of these when the query did not ask for it is
 # very likely the wrong version. measured need: a text search returned
@@ -88,6 +94,8 @@ class Match:
   rival_gap: int | None = None
   acoustid_score: float | None = None
   variant_mismatch: bool = False
+  artist_unrelated: bool = False
+  corroborated: bool = False
 
   @property
   def duration_ok(self) -> bool:
@@ -111,6 +119,123 @@ def variant_mismatch(query_title: str, matched_title: str) -> bool:
   query = (query_title or "").casefold()
   matched = (matched_title or "").casefold()
   return any(w in matched and w not in query for w in VARIANT_WORDS)
+
+
+_WS = re.compile(r"\s+")
+
+
+# Below this, a result is not a plausible rendering of what we searched for.
+# Measured against the first hundred-track run: the catastrophic mismatches —
+# a different song by a different artist — scored 0.14 to 0.36, while every
+# correct match scored 0.58 or above, including those where the query artist
+# was a channel name (`jayseanworldwide` -> `Jay Sean`, 0.88).
+#
+# A *cover* is not caught here and is not meant to be: it carries the right
+# title, so `Luke Conard - We Are Never Ever Getting Back Together` scores
+# 0.75 against a Taylor Swift query. Ranking handles that case — the original
+# scores higher and wins — and this gate only stops a result being used when
+# nothing fetched resembles the query at all.
+PLAUSIBLE = 0.45
+
+# How much an unrequested version designation costs when ranking results.
+# Enough that `Marvin Gaye (Remix)` loses to `Marvin Gaye (feat. Meghan
+# Trainor)` for a plain `Marvin Gaye` query, and that the original beats a
+# re-recording, while a correct match carrying one still clears PLAUSIBLE.
+VERSION_PENALTY = 0.25
+
+
+def _fold(text: str) -> str:
+  return _WS.sub(" ", re.sub(r"[^\w\s]", " ", (text or "").casefold())).strip()
+
+
+def match_score(query_artist: str, query_title: str, artist: str, title: str) -> float:
+  """Score how well a source's result renders what we searched for.
+
+  One function for every source, so "which of these five is the right one" is
+  answered the same way everywhere. Before this existed, iTunes and Spotify
+  fetched five results and kept `[0]`, which is frequently a remaster, a live
+  cut or a re-recording with the original further down the list.
+
+  Title dominates and artist supports rather than gates: the query artist is
+  often a YouTube channel name (`jayseanworldwide`, `push baby`), so a weak
+  artist match must not veto a perfect title. Within one source's results the
+  query is constant, so a low artist weight still ranks them correctly.
+
+  Args:
+    query_artist: Normalised artist we searched for.
+    query_title: Normalised title we searched for.
+    artist: Artist the source returned.
+    title: Title the source returned.
+
+  Returns:
+    A score from 0.0 to 1.0.
+  """
+  from music.publish.naming import strip_version
+
+  def ratio(left: str, right: str) -> float:
+    return difflib.SequenceMatcher(None, _fold(left), _fold(right)).ratio()
+
+  query_core, title_core = strip_version(query_title), strip_version(title)
+  # an exact rendering counts for more than a matching core: "Love Story" and
+  # "Love Story (Taylor's Version)" share a core and are different recordings
+  title_sim = 0.7 * ratio(query_title, title) + 0.3 * ratio(query_core, title_core)
+  score = 0.7 * title_sim + 0.3 * ratio(query_artist, artist)
+
+  # A version designation the query never asked for means a different
+  # recording. This deliberately uses `strip_version`'s vocabulary rather than
+  # VARIANT_WORDS: that list feeds `confidence`, and adding "remix" to it would
+  # drop every legitimate remix in an electronic library below auto-accept.
+  # A `feat.` clause is not a version and `strip_version` leaves it alone.
+  if title_core != title and query_core == query_title:
+    score -= VERSION_PENALTY
+  if variant_mismatch(query_title, title):
+    score -= 0.12
+  return max(0.0, min(1.0, score))
+
+
+def is_plausible(query_artist: str, query_title: str, artist: str, title: str) -> bool:
+  """Whether a result is close enough to be the thing we asked for.
+
+  Args:
+    query_artist: Normalised artist we searched for.
+    query_title: Normalised title we searched for.
+    artist: Artist the source returned.
+    title: Title the source returned.
+
+  Returns:
+    True if the result is a believable match.
+  """
+  return match_score(query_artist, query_title, artist, title) >= PLAUSIBLE
+
+
+def artist_is_unrelated(query_artist: str, matched_artist: str) -> bool:
+  """Whether a match's artist bears no relation to the one we searched for.
+
+  This is the cover signature. A fingerprint match carries the right title and
+  a stranger's name: `Waiting for Love` by "Die NotenDealer", `We Are Never
+  Ever Getting Back Together` by "Luke Conard". Title similarity cannot
+  distinguish those from the real thing, so the artist has to be checked
+  separately — but only as a confidence signal, never as a selection filter.
+
+  A YouTube channel name usually *contains* the artist (`jayseanworldwide`,
+  `iyazlive`, `seankingston`), so containment either way counts as related.
+  A renamed band does not (`push baby` is Rixton), which this will flag for
+  review — the wrong way round is publishing a cover as the original.
+
+  Args:
+    query_artist: Normalised artist we searched for.
+    matched_artist: Artist the match is credited to.
+
+  Returns:
+    True when the two share nothing.
+  """
+  left = re.sub(r"[^a-z0-9]", "", (query_artist or "").casefold())
+  right = re.sub(r"[^a-z0-9]", "", (matched_artist or "").casefold())
+  if not left or not right:
+    return False
+  if left in right or right in left:
+    return False
+  return difflib.SequenceMatcher(None, left, right).ratio() < 0.5
 
 
 def confidence(match: Match) -> float:
@@ -139,9 +264,22 @@ def confidence(match: Match) -> float:
     contested = match.rival_gap is not None and match.rival_gap < 2
     base = 0.85 if (score >= 90 and match.duration_ok and not contested) else 0.50
 
-  # an unrequested version qualifier drops the match below auto-accept, because
-  # being confidently wrong about the version is worse than asking.
-  if match.variant_mismatch:
+  # Independent catalogues agreeing on artist and title settles *which song
+  # this is*, which is the only question the review queue exists to answer
+  # (SPEC.md §9). A dubious fingerprint is not an unknown identity when two
+  # other sources name the same recording — that is how `Call Me Maybe` and
+  # `FourFiveSeconds` ended up in review despite being unambiguous.
+  # Corroboration answers "which song is this", so it cannot lift a doubt
+  # about *this file's audio*. A fingerprint is acoustic evidence; catalogue
+  # agreement is bibliographic. Two catalogues confirming that Taylor Swift
+  # recorded the song does not make this file her recording of it — and
+  # without this guard, the three covers found above were lifted straight back
+  # to auto-accept and would have been tagged as the originals.
+  if match.corroborated and not (match.variant_mismatch or match.artist_unrelated):
+    base = max(base, CORROBORATED)
+
+  # applied last, so nothing can raise a match back over them
+  if match.variant_mismatch or match.artist_unrelated:
     base = min(base, 0.50)
   return round(base, 2)
 
@@ -170,9 +308,6 @@ def review_reason(match: Match) -> str | None:
   if should_auto_accept(match):
     return None
   return "no_match" if match.evidence is Evidence.NONE else "low_confidence"
-
-
-_WS = re.compile(r"\s+")
 
 
 def normalised_equal(left: str, right: str) -> bool:

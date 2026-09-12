@@ -51,45 +51,67 @@
 - [x] **t15** playlist enumeration
 - [x] **t16** pre-download dedup on `video_id`
 - [x] **t17** art-track preference + music-video detection (§8 signal table)
-- [ ] **cp3** 20-track playlist: all ≥256 kbps, re-run downloads nothing, a known
-  music-video url is flagged
+- [x] **cp3** **PASS** — 13 files all itag 141, re-run downloaded nothing,
+  the known music-video url was flagged. `tools/gate_ingest.py`.
 
 ## phase 3 — resolution is real
 
-- [ ] **t18** acoustid fingerprinting → stable id (needs api key)
-- [ ] **t19** discogs adapter + cassettes
-- [ ] **t20** spotify adapter + cassettes
-- [ ] **t21** itunes search adapter + cassettes (artwork)
-- [ ] **t22** url override: spotify/mb/discogs/beatport link → exact identity
-- [ ] **cp4** **BINDING GO/NO-GO** — re-measure the same 100 tracks with all
+- [x] **t18** acoustid fingerprinting → stable id (needs api key)
+- [x] **t19** discogs adapter + cassettes
+- [x] **t20** spotify adapter + cassettes
+- [x] **t21** itunes search adapter + cassettes (artwork)
+- [x] **t22** url override: spotify/mb/discogs/beatport link → exact identity
+- [x] **cp4** **BINDING GO/NO-GO** — **PASSED at 77.1%** (seed 7, binding) and
+  80% (seed 99). re-measure the same 100 tracks with all
   sources + art-track audio. ≥75% proceed · 65–75% revise §9 · <65% rethink.
   ci green with no network.
 
 ## phase 4 — classify + arbitrate
 
-- [ ] **t23** `classify.py`: essentia → top-level genre → family (§7)
+- [x] **t23** `classify.py`: essentia → top-level genre → family (§7)
   - accept: `Style` is never written as a tag
-- [ ] **cp5** **bollywood gate** — 30 bollywood tracks, families sane
-- [ ] **t24** `arbitrate.py` + `precedence` table, pure
+- [x] **cp5** **bollywood gate** — failed at 37%, fixed with an ISRC
+  country override, now **87% PASS**. see SPEC.md §7.
+- [x] **t24** `arbitrate.py` + `precedence` table, pure
   - accept: confidence gates entry, not ranking (§12); first source wins
   - accept: album fields resolved as a group from one release; deluxe
     preferred; dates still come from the release-group's first release (§7)
 
 ## phase 5 — publish quality
 
-- [ ] **t25** all 18 id3v2.4 frames (§10) incl. both `TDRC` and `TDRL`
+- [x] **t25** all 18 id3v2.4 frames (§10) incl. both `TDRC` and `TDRL`
   - verify: round-trip test asserts every frame survives
-- [ ] **t26** canonical naming (`ft.`, `[remix]`) + genre/artist layout (§14)
-- [ ] **t27** `retag` and `resolve --redo`
+- [x] **t26** canonical naming (`ft.`, `[remix]`) + genre/artist layout (§14)
+- [x] **t27** `retag` and `resolve --redo`
   - accept: never overwrites `decided_by='manual'`
-- [ ] **cp6** 20 tracks verified in both apps; retag preserves a manual edit
+- [>] **cp6** verified in rekordbox + serato: fields populate correctly.
+  **accuracy defects found and fixed** — compilations winning over albums,
+  `Not On Label`, curly quotes, deluxe editions ignored across sources.
+  outstanding: re-verify in both apps, and the retag-preserves-manual-edit step.
 
 ## phase 6 — web ui
 
-- [ ] **t28** review queue + audio preview
-- [ ] **t29** metadata editor; edits are sticky and re-tag the file
-- [ ] **t30** provenance panel: what each source said, per field
-- [ ] **t31** elicitation mode → populates `precedence`
+- [x] **t28** review queue + audio preview
+- [x] **t29** metadata editor; edits are sticky and re-tag the file
+- [x] **t30** provenance panel: what each source said, per field
+- [x] **t31** elicitation mode → populates `precedence`
+  blind comparison (no source named in page or payload), stratified per
+  (field × family) cell, shrunk toward the built-in ranking, thin cells left
+  alone. `music serve` → Calibrate.
+- [x] **t31b** add tracks from the web ui — paste a youtube link, worker
+  thread, live progress. ingest extracted from `cli` into `pipeline`.
+- [x] **t31c** pipeline console: real yt-dlp output, per-stage counters,
+  `music reset` for a clean end-to-end run
+- [x] **t35** arbitration accuracy: agreement beats precedence on every
+  factual field; compilation test uses the arbitrated artist; unbracketed
+  album editions group. 12 wrong artists and 12 wrong albums -> 0 (§12)
+- [x] **t36** result selection: one scorer for every source; itunes/spotify
+  rank the five they fetch; acoustid scores each linked recording and
+  rejects the match when none resembles the query (§12)
+- [x] **t37** corroboration: two agreeing catalogues settle a doubtful
+  identity, but never one about the audio. 86.8% auto-accept, 0 covers (§12)
+- [x] **t38** search the library by artist, title, album, label or the name
+  the track was searched under
 - [ ] **cp7** review 50 real items, measure seconds/item vs §9's assumed 35 s
 
 ## phase 7 — the real run

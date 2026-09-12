@@ -64,6 +64,17 @@ GOLDEN = [
     ("David Guetta", "I'm Good (Blue) - Brooks Remix"),
     ("David Guetta", "I'm Good (Blue) - Brooks Remix"),
   ),
+  # --- measured cp2 "no search hit" failures that were our bug, not
+  #     musicbrainz coverage ---
+  (
+    ("Selena Gomez", "Selena Gomez, Marshmello - Wolves"),
+    ("Selena Gomez", "Wolves"),
+  ),
+  (
+    ("Lil Uzi Vert", "That Way - Bonus Track"),
+    ("Lil Uzi Vert", "That Way"),
+  ),
+  (("Artist", "Song (Bonus Track)"), ("Artist", "Song")),
   # --- already clean, must pass through untouched ---
   (("Pitbull", "Time of Our Lives"), ("Pitbull", "Time of Our Lives")),
 ]
@@ -88,6 +99,41 @@ def test_golden(raw, expected):
 )
 def test_clean_artist(raw, expected):
   assert normalise.clean_artist(raw) == expected
+
+
+@pytest.mark.parametrize(
+  ("artist", "title", "expected"),
+  [
+    # the head is a credit line and contains the artist: strip it
+    ("Selena Gomez", "Selena Gomez, Marshmello - Wolves", "Wolves"),
+    ("Eminem", "Eminem - Stan", "Stan"),
+    ("Kesha", "Ke$ha - Blow", "Ke$ha - Blow"),  # artist not in head
+    # the head is part of the song, not a credit: leave it alone
+    (
+      "David Guetta",
+      "I'm Good (Blue) - Brooks Remix",
+      "I'm Good (Blue) - Brooks Remix",
+    ),
+    ("Burnie", "Make It - H.K.G Mix", "Make It - H.K.G Mix"),
+    # a remix survives an artist-prefix strip
+    ("Jay-Z", "Jay-Z - Song - Remix", "Song - Remix"),
+    ("Artist", "No Dash Here", "No Dash Here"),
+  ],
+)
+def test_artist_prefix_stripping(artist, title, expected):
+  assert normalise.clean_title(title, artist) == expected
+
+
+def test_full_credit_is_kept_for_retry():
+  """Searching only the primary artist misses pair-credited releases."""
+  result = normalise.normalise("Jake Fine & STRAIGHTUPJE", "Island Girl")
+  assert result.artist == "Jake Fine"
+  assert result.artist_full == "Jake Fine & STRAIGHTUPJE"
+
+
+def test_full_credit_drops_channel_noise():
+  assert normalise.clean_artist_full("LMFAOVEVO") == "LMFAO"
+  assert normalise.clean_artist_full("Burnie - Topic") == "Burnie"
 
 
 def test_featured_artists_are_extracted_not_just_discarded():

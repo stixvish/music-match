@@ -69,3 +69,148 @@ def test_filename():
 
 def test_filename_is_path_safe():
   assert "/" not in naming.filename("AC/DC", "Back/Black")
+
+
+# --- artist credit formatting (SPEC.md §14) --------------------------------
+
+
+@pytest.mark.parametrize(
+  ("artists", "expected"),
+  [
+    (["Pitbull"], "Pitbull"),
+    (["Lost Frequencies", "Calum Scott"], "Lost Frequencies & Calum Scott"),
+    (
+      ["David Guetta", "Bebe Rexha", "Brooks"],
+      "David Guetta, Bebe Rexha & Brooks",
+    ),
+    (
+      ["Metro Boomin", "A$AP Rocky", "Roisee", "Someone"],
+      "Metro Boomin, A$AP Rocky, Roisee & Someone",
+    ),
+    ([], ""),
+    (["", "  "], ""),
+    (["A", "", "B"], "A & B"),
+  ],
+)
+def test_format_artists(artists, expected):
+  assert naming.format_artists(artists) == expected
+
+
+def test_two_artists_collapse_to_ampersand():
+  """The 2-artist rule falls out of the serial-comma rule, not a special case."""
+  assert naming.format_artists(["A", "B"]) == "A & B"
+
+
+def test_credit_order_is_preserved_not_sorted():
+  assert naming.format_artists(["Zebra", "Aardvark"]) == "Zebra & Aardvark"
+
+
+@pytest.mark.parametrize(
+  ("raw", "expected"),
+  [
+    ("Alesso; Tove Lo", ["Alesso", "Tove Lo"]),
+    ("Macklemore, Ryan Lewis", ["Macklemore", "Ryan Lewis"]),
+    ("PARTYNEXTDOOR & Drake", ["PARTYNEXTDOOR", "Drake"]),
+    (
+      "Atif Aslam, Sunidhi Chauhan & Pritam",
+      ["Atif Aslam", "Sunidhi Chauhan", "Pritam"],
+    ),
+    ("Pitbull", ["Pitbull"]),
+    ("", []),
+  ],
+)
+def test_split_artists_is_liberal_on_read(raw, expected):
+  """Input tags are inconsistent; reading must accept every convention."""
+  assert naming.split_artists(raw) == expected
+
+
+def test_read_then_write_normalises_any_input_convention():
+  for raw in ["Alesso; Tove Lo", "Alesso, Tove Lo", "Alesso & Tove Lo"]:
+    assert naming.format_artists(naming.split_artists(raw)) == "Alesso & Tove Lo"
+
+
+# --- version extraction (SPEC.md §14) --------------------------------------
+
+
+@pytest.mark.parametrize(
+  ("title", "mix_name", "remixer"),
+  [
+    # both: a person made a version
+    ("Delilah [Tom Santa Remix]", "Tom Santa Remix", "Tom Santa"),
+    ("Delilah (Tom Santa Remix)", "Tom Santa Remix", "Tom Santa"),
+    ("I'm Good (Blue) - Brooks Remix", "Brooks Remix", "Brooks"),
+    ("in plain sight (LEFTI REMIX)", "LEFTI REMIX", "LEFTI"),
+    ("Make It - H.K.G Mix", "H.K.G Mix", "H.K.G"),
+    # version only: no person named
+    ("Say Nothing - Extended Mix", "Extended Mix", ""),
+    ("Song (Radio Edit)", "Radio Edit", ""),
+    ("Track (Original Mix)", "Original Mix", ""),
+    ("Track (Club Mix)", "Club Mix", ""),
+    ("Track (Instrumental Version)", "Instrumental Version", ""),
+    # not a person: a year, a re-recording, a generic label
+    ("I'm Not Alone (2019 Edit)", "2019 Edit", ""),
+    ("Love Story (Taylor's Version)", "Taylor's Version", ""),
+    ("Love Story (Taylor\u2019s Version)", "Taylor\u2019s Version", ""),
+    # but a named remix keeps its remixer even with an ampersand
+    (
+      "Despacito (Major Lazer & MOSKA remix)",
+      "Major Lazer & MOSKA remix",
+      "Major Lazer & MOSKA",
+    ),
+    # neither
+    ("Summer", "", ""),
+    ("Mood (ft. iann dior)", "", ""),
+    ("", "", ""),
+  ],
+)
+def test_extract_version(title, mix_name, remixer):
+  version = naming.extract_version(title)
+  assert (version.mix_name, version.remixer) == (mix_name, remixer)
+
+
+def test_mix_name_and_remixer_are_different_fields():
+  """mix_name is which version; remixer is who made it (SPEC.md §14)."""
+  extended = naming.extract_version("Track - Extended Mix")
+  assert extended.mix_name and not extended.remixer
+
+  remixed = naming.extract_version("Track [Someone Remix]")
+  assert remixed.mix_name and remixed.remixer
+
+
+def test_featured_clause_is_not_a_version():
+  assert naming.extract_version("Mood (ft. iann dior)").mix_name == ""
+
+
+def test_typographic_quotes_are_asciified():
+  """MusicBrainz uses curly quotes; a search for "Can't" must match."""
+  assert naming.canonical_title("Club Can’t Handle Me") == "Club Can't Handle Me"
+  assert naming.safe_component("Flo’s Track") == "Flo's Track"
+  assert naming.asciify_quotes("“quoted” – dash") == '"quoted" - dash'
+
+
+# --- capitalisation a source mangled ---------------------------------------
+
+
+@pytest.mark.parametrize(
+  ("given", "want"),
+  [
+    ("I’Ll Be Waiting", "I'll Be Waiting"),
+    ("Don'T Stop", "Don't Stop"),
+    ("It'S Time", "It's Time"),
+    ("We'Re Here", "We're Here"),
+    ("I'Ve Got You", "I've Got You"),
+  ],
+)
+def test_a_title_cased_contraction_is_repaired(given, want):
+  """Spotify title-cases hard enough to produce `I'Ll`, which is never English.
+
+  Repaired on the way out rather than fought over in precedence, since no
+  source ranking makes a mangled string correct.
+  """
+  assert naming.canonical_title(given) == want
+
+
+@pytest.mark.parametrize("name", ["O'Brien's Song", "D'Angelo", "O'Neal", "L'Amour"])
+def test_a_name_is_not_a_contraction(name):
+  """The suffix list is explicit because a blanket rule destroys these."""
+  assert naming.canonical_title(name) == name

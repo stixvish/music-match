@@ -15,6 +15,8 @@ from collections.abc import Sequence
 from pydantic import ValidationError
 
 from music.identify import Evidence, Match, distinct_rival_gap, variant_mismatch
+from music.normalise import extract_featured
+from music.publish.naming import format_artists
 from music.sources import cache
 from music.sources.base import FieldCandidate, Identity, ReleaseInfo
 from music.sources.ratelimit import RateLimiter, with_backoff
@@ -22,6 +24,11 @@ from music.sources.ratelimit import RateLimiter, with_backoff
 log = logging.getLogger(__name__)
 
 API = "https://musicbrainz.org/ws/2"
+# Cover art for a MusicBrainz release, served by the Internet Archive. This
+# is the only way to get the cover *of the release we actually tagged*:
+# MusicBrainz itself carries no images, so whenever it won the album the
+# artwork fell to another source describing a different record (SPEC.md §7).
+COVER_ART = "https://coverartarchive.org"
 NAME = "musicbrainz"
 
 # edition keywords, used only to break a tie on track count (SPEC.md §7).
@@ -85,6 +92,45 @@ class MusicBrainz:
       {"inc": "releases+release-groups+media+artist-credits"},
     )
 
+  def cover_art_url(self, release_id: str, group_id: str = "") -> str:
+    """Find a Cover Art Archive front cover for this release.
+
+    The release is tried first and its group second: measured over 14 real
+    releases, 13 had cover art on the release itself and the one that did not
+    (`channel ORANGE`) had it on the group, so together the coverage was
+    complete.
+
+    Availability is checked rather than assumed, and the answer is cached, so
+    a missing cover leaves the field to iTunes or Spotify instead of emitting a
+    URL that 404s at publish time.
+
+    Args:
+      release_id: MusicBrainz release id.
+      group_id: MusicBrainz release-group id, used as a fallback.
+
+    Returns:
+      An image URL, or an empty string when the archive has none.
+    """
+    for kind, mbid in (("release", release_id), ("release-group", group_id)):
+      if mbid and self._has_cover(kind, mbid):
+        return f"{COVER_ART}/{kind}/{mbid}/front-1200"
+    return ""
+
+  def _has_cover(self, kind: str, mbid: str) -> bool:
+    def fetch() -> dict:
+      url = f"{COVER_ART}/{kind}/{mbid}/front-1200"
+      request = urllib.request.Request(
+        url, method="HEAD", headers={"User-Agent": self._ua}
+      )
+      try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+          return {"ok": response.status == 200}
+      except Exception:  # noqa: BLE001 - absence is the common answer
+        return {"ok": False}
+
+    result = cache.cached(self._conn, "coverart", (kind, mbid), fetch)
+    return bool(dict(result).get("ok"))
+
   def search_recordings(self, identity: Identity, limit: int = 8) -> list[dict]:
     """Search for recordings matching an identity.
 
@@ -98,7 +144,19 @@ class MusicBrainz:
     if identity.isrc:
       data = self._get(f"isrc/{identity.isrc}", {"inc": "releases+artist-credits"})
       return list(data.get("recordings", []))
-    query = f'recording:"{identity.title}" AND artist:"{identity.artist}"'
+    recordings = self._search_text(identity.artist, identity.title, limit)
+    # searching the primary artist alone misses releases credited to the pair
+    # ("Jake Fine & STRAIGHTUPJE"), so retry with the full credit.
+    if (
+      not recordings
+      and identity.artist_full
+      and (identity.artist_full != identity.artist)
+    ):
+      recordings = self._search_text(identity.artist_full, identity.title, limit)
+    return recordings
+
+  def _search_text(self, artist: str, title: str, limit: int) -> list[dict]:
+    query = f'recording:"{title}" AND artist:"{artist}"'
     data = self._get("recording", {"query": query, "limit": str(limit)})
     return list(data.get("recordings", []))
 
@@ -121,6 +179,7 @@ class MusicBrainz:
         out.append(
           ReleaseInfo(
             release_id=str(release.get("id", "")),
+            release_group_id=str(group.get("id") or ""),
             title=str(release.get("title", "")),
             track_count=int(media.get("track-count") or len(tracks) or 0),
             track_number=_as_int(tracks[0].get("number") or tracks[0].get("position")),
@@ -217,6 +276,41 @@ class MusicBrainz:
     )
     return match, self.lookup(identity)
 
+  def credits(self, recording_id: str) -> list[FieldCandidate]:
+    """Fetch composer and lyricist via work relationships.
+
+    MusicBrainz keeps writer credits on the *work*, not the recording, so this
+    is a two-hop lookup: `recording -> performance relation -> work`, then
+    `work -> artist relations`. That is two extra requests per track at 1 req/s
+    — roughly 78 minutes across a 2,300-track library — which is why it is
+    opt-in. Composer and lyricist are nice-to-haves (SPEC.md §2).
+
+    Args:
+      recording_id: MusicBrainz recording MBID.
+
+    Returns:
+      Composer and lyricist candidates, empty when the work has no credits.
+    """
+    try:
+      recording = self._get(f"recording/{recording_id}", {"inc": "work-rels"})
+    except Exception as exc:  # noqa: BLE001 - credits are optional
+      log.debug("work-rels lookup failed: %s", exc)
+      return []
+
+    work_ids = [
+      rel["work"]["id"]
+      for rel in recording.get("relations", []) or []
+      if (rel.get("work") or {}).get("id")
+    ]
+    if not work_ids:
+      return []
+    try:
+      work = self._get(f"work/{work_ids[0]}", {"inc": "artist-rels"})
+    except Exception as exc:  # noqa: BLE001 - credits are optional
+      log.debug("work artist-rels lookup failed: %s", exc)
+      return []
+    return parse_credits(work)
+
   def lookup(self, identity: Identity) -> Sequence[FieldCandidate]:
     """Return candidates for a track.
 
@@ -237,12 +331,57 @@ class MusicBrainz:
     top, releases = self._best_recording(recordings, identity)
     if top is None:
       return []
+    return self._candidates(top, releases, identity)
+
+  def candidates_from(
+    self, recording: dict, identity: Identity
+  ) -> Sequence[FieldCandidate]:
+    """Build candidates from an already-fetched recording.
+
+    Used by the fingerprint path, which arrives with an mbid rather than a
+    search result.
+
+    Args:
+      recording: A full recording dict.
+      identity: What we know so far.
+
+    Returns:
+      Candidates.
+    """
+    return self._candidates(recording, self.releases_for(recording), identity)
+
+  def _candidates(
+    self,
+    top: dict,
+    releases: list[ReleaseInfo],
+    identity: Identity,  # noqa: ARG002 - kept for symmetry with the callers
+  ) -> Sequence[FieldCandidate]:
+    act, featured = split_credit(top.get("artist-credit"))
+    title = str(top.get("title", ""))
+    # MusicBrainz states who is featured in two places — the join phrase
+    # between credited names, and the title's own `(feat. ...)` clause — and it
+    # is the only source that distinguishes a guest from a collaborator at all.
+    # Spotify returns the primary artist and sometimes drops the guest from the
+    # title too, so `Time of Our Lives (feat. Ne-Yo)` came out as
+    # `Time of Our Lives` once Spotify led both fields (SPEC.md §7).
+    featured = tuple(dict.fromkeys([*featured, *extract_featured(title)]))
+    # the guest belongs in the title, in house style (SPEC.md §14). MusicBrainz
+    # puts it in the credit instead, so `Neverender` came through with no sign
+    # of Tame Impala anywhere on the tag.
+    if featured and "feat" not in title.casefold() and "ft." not in title.casefold():
+      title = f"{title} (feat. {format_artists(featured)})"
     candidates = [
-      FieldCandidate(field="title", value=str(top.get("title", "")), source=NAME),
+      FieldCandidate(field="title", value=title, source=NAME),
       FieldCandidate(
-        field="artist", value=_credit_name(top.get("artist-credit")), source=NAME
+        field="artist", value=act or _credit_name(top.get("artist-credit")), source=NAME
       ),
     ]
+    if featured:
+      candidates.append(
+        FieldCandidate(
+          field="featured_artists", value=format_artists(featured), source=NAME
+        )
+      )
     if top.get("id"):
       candidates.append(
         FieldCandidate(field="mb_recording_id", value=str(top["id"]), source=NAME)
@@ -261,6 +400,10 @@ class MusicBrainz:
           candidates.append(
             FieldCandidate(field=field_name, value=str(value), source=NAME)
           )
+      # the cover of this exact release, so the picture matches the tag
+      art = self.cover_art_url(chosen.release_id, chosen.release_group_id)
+      if art:
+        candidates.append(FieldCandidate(field="artwork_url", value=art, source=NAME))
 
     earliest = earliest_date(releases)
     if earliest:
@@ -297,11 +440,92 @@ def rank_recordings(
   return sorted(recordings, key=key)
 
 
+def parse_credits(work: dict) -> list[FieldCandidate]:
+  """Extract composer and lyricist from a work's artist relations.
+
+  MusicBrainz distinguishes `composer`, `lyricist` and the combined `writer`.
+  A bare `writer` credit is used for composer only when no explicit composer
+  exists, since it means "wrote it" without saying which half.
+
+  Args:
+    work: A work object fetched with `inc=artist-rels`.
+
+  Returns:
+    Candidates, empty when the work carries no credits.
+  """
+  by_type: dict[str, list[str]] = {}
+  for rel in work.get("relations", []) or []:
+    name = (rel.get("artist") or {}).get("name")
+    kind = str(rel.get("type") or "").casefold()
+    if name and kind in ("composer", "lyricist", "writer"):
+      by_type.setdefault(kind, []).append(str(name))
+
+  out: list[FieldCandidate] = []
+  composer = by_type.get("composer") or by_type.get("writer") or []
+  if composer:
+    out.append(FieldCandidate(field="composer", value=", ".join(composer), source=NAME))
+  lyricist = by_type.get("lyricist") or []
+  if lyricist:
+    out.append(FieldCandidate(field="lyricist", value=", ".join(lyricist), source=NAME))
+  return out
+
+
 def _as_int(value: object) -> int | None:
   try:
     return int(str(value))
   except TypeError, ValueError:
     return None
+
+
+def recording_artist(recording: dict) -> str:
+  """Read the credited artist off a recording.
+
+  Args:
+    recording: A raw recording dict.
+
+  Returns:
+    The primary credited artist, or an empty string.
+  """
+  return _credit_name(recording.get("artist-credit"))
+
+
+def split_credit(credit: object) -> tuple[str, tuple[str, ...]]:
+  """Split a MusicBrainz artist-credit into the act and its featured guests.
+
+  MusicBrainz is the only source that distinguishes these, which is why §7
+  ranks it first for credits: it records the join phrase between each name.
+  `Justice feat. Tame Impala` arrives as two entries joined by " feat. ",
+  where iTunes flattens the same thing to `Justice & Tame Impala` and Spotify
+  drops the guest entirely.
+
+  A `feat.`/`featuring` join phrase marks everyone after it as featured; any
+  other phrase (`&`, `,`, `and`) marks a collaboration, and those names stay
+  with the artist.
+
+  Args:
+    credit: A raw `artist-credit` array.
+
+  Returns:
+    The credited act, and the featured artists in order.
+  """
+  if not isinstance(credit, list):
+    return "", ()
+  names: list[str] = []
+  featured: list[str] = []
+  seen_feat = False
+  for entry in credit:
+    if not isinstance(entry, dict):
+      continue
+    artist = entry.get("artist") or {}
+    name = entry.get("name") or (artist.get("name") if isinstance(artist, dict) else "")
+    if name:
+      (featured if seen_feat else names).append(str(name))
+    join = str(entry.get("joinphrase") or "").casefold()
+    if "feat" in join or "with" in join:
+      seen_feat = True
+  # collaborators stay with the act in house style ("A & B"); only names
+  # after a feat. join phrase move into the title
+  return (format_artists(names), tuple(featured))
 
 
 def _credit_name(credit: object) -> str:

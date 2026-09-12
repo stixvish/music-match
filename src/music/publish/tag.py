@@ -37,6 +37,11 @@ FRAME_MAP: dict[str, str] = {
 }
 
 
+# frames this project writes. everything else belongs to another tool and is
+# preserved untouched (SPEC.md §10).
+OWNED_FRAMES = frozenset(FRAME_MAP.values()) | {"COMM", "APIC"}
+
+
 @dataclass
 class Tags:
   """A complete tag set, keyed by the names in FRAME_MAP."""
@@ -74,7 +79,17 @@ def write(path: Path, tags: Tags) -> None:
   if audio.tags is None:
     audio.add_tags()
   assert audio.tags is not None
+
+  # Frames this project does not own are preserved across a rewrite. Serato
+  # stores its beatgrid and cue points in GEOB frames inside the ID3 tag, and
+  # a naive delete-then-write destroys them — verified on real files that
+  # already carried Serato BeatGrid, Markers2, Autotags and Overview.
+  foreign = [
+    frame for key, frame in audio.tags.items() if key.split(":")[0] not in OWNED_FRAMES
+  ]
   audio.tags.delete(str(path))
+  for frame in foreign:
+    audio.tags.add(frame)
 
   for name, value in tags.values.items():
     if value in (None, ""):
