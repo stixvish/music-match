@@ -304,7 +304,9 @@ function renderTrack() {
       <button class="danger" id="reject" title="Delete the audio and never download it again">Delete</button>
       <input class="url" id="url" type="text" placeholder="Paste a Spotify / MusicBrainz / Discogs link…">
     </div>
+    <div class="fields">
     ${groups.map((group) => `
+      <section class="group">
       <div class="group-label">${esc(group.name)}</div>
       ${group.fields.map((f) => {
       const r = resolved[f];
@@ -323,7 +325,9 @@ function renderTrack() {
                placeholder="${esc(p?.value ?? opts[0]?.value ?? '')}" data-field="${f}">
         <span class="src ${by}">${esc(r?.source ?? hint)}${by ? ` · ${by}` : ''}</span>
       </div>`;
-    }).join('')}`).join('')}
+    }).join('')}
+      </section>`).join('')}
+    </div>
     <p class="label" style="margin-top:1rem">
       <kbd>j</kbd>/<kbd>k</kbd> move · <kbd>space</kbd> play · <kbd>tab</kbd> field ·
       <kbd>↵</kbd> accept · <kbd>esc</kbd> leave a field

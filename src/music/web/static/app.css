@@ -107,8 +107,11 @@ h2 { font-size: 1.0625rem; line-height: 1.3; letter-spacing: -0.012em; margin: 0
 
 /* --- fields ------------------------------------------------------------- */
 
+/* the fixed outer columns are what keep every input the same width; they are
+   sized to the longest real label and the longest real provenance string
+   ("would pick musicbrainz"), not padded, so two columns leave the value room */
 .field {
-  display: grid; grid-template-columns: 8.5rem minmax(0, 1fr) 11rem; gap: 0.5rem;
+  display: grid; grid-template-columns: 7rem minmax(0, 1fr) 8.25rem; gap: 0.5rem;
   align-items: center; padding: 0.3rem 0.5rem; border-radius: var(--r-sm);
 }
 .field .src {
@@ -404,9 +407,34 @@ button.danger.armed {
 /* twenty undifferentiated rows is worse than four groups of five */
 .group-label {
   font-size: 0.6875rem; letter-spacing: 0.04em; text-transform: uppercase;
-  color: var(--muted); margin: 0.9rem 0 0.25rem 0.5rem;
+  color: var(--muted); margin: 0 0 0.25rem 0.5rem;
 }
-.group-label:first-of-type { margin-top: 0.25rem; }
 /* an empty field is available, not missing: present but quiet */
 .field input[data-empty="true"] { opacity: 0.75; }
 .field input[data-empty="true"]:focus { opacity: 1; }
+
+/* --- two columns when there is room --------------------------------------- */
+
+/* 21 fields stack to 1052px in one column and overflow a 1201px viewport by
+   281px. Cutting two fields recovers ~112px and still overflows; two columns
+   halve it. `columns` balances automatically and falls back to one column
+   below ~62rem, so a narrow window still reads top to bottom. */
+.fields { columns: 30rem 2; column-gap: 1.75rem; }
+.group { break-inside: avoid; display: block; }
+.group-label { margin-top: 0; }
+.group + .group { margin-top: 0.9rem; }
+
+/* At a narrow pane the three-column row collapses the input to ~68px, because
+   the label and provenance columns are fixed. Below that, the row stacks and
+   the input gets the full width — the value is what you are there to read. */
+#track-pane { container-type: inline-size; }
+
+@container (max-width: 34rem) {
+  .field {
+    grid-template-columns: 1fr;
+    gap: 0.15rem;
+    padding-block: 0.45rem;
+  }
+  .field .label { margin-left: 0.1rem; }
+  .field .src { justify-self: start; margin-left: 0.1rem; }
+}

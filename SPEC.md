@@ -1030,6 +1030,22 @@ classification, credits, notes, artwork) because twenty undifferentiated rows
 scan worse than five groups. Empty ones are dimmed and dashed: available, not
 missing.
 
+**They fit in two columns rather than being cut.** Measured: 21 fields stack to
+1052px in one column and overflow a 1201px viewport by 281px. Dropping
+`grouping` and `comment` — the two obvious candidates — recovers about 112px
+and still overflows by 169px, so it would have cost two working fields without
+solving the problem. `columns: 30rem 2` halves the height, keeps each group
+whole (`break-inside: avoid`), and falls back to one column below ~62rem.
+
+The fixed outer columns are what keep every input the same width, so they are
+sized to the longest real label and the longest real provenance string rather
+than padded: 7rem and 8.25rem, which leaves the value 230px instead of 162px in
+a two-column pane, with no provenance text clipped.
+
+Below 34rem the row stacks entirely — at a 460px pane the three-column grid
+squeezed the input to 68px, which is narrower than most of the values going
+into it.
+
 The list is **derived from the tag writer and served by the api**, not
 hand-written in the ui. It had already drifted twice:
 
