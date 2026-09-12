@@ -11,7 +11,14 @@ from pydantic import BaseModel
 
 from music import config, db, elicit, pipeline
 from music.arbitrate import Decision, arbitrate, persist
-from music.publish import publish_track, retag, tag, transcode
+from music.publish import (
+  publish_track,
+  refreshed_artwork,
+  reset_refreshed,
+  retag,
+  tag,
+  transcode,
+)
 from music.sources.base import FieldCandidate, Identity
 from music.sources.musicbrainz import MusicBrainz
 from music.sources.spotify import Spotify
@@ -265,9 +272,10 @@ def create_app(database: Path | None = None) -> FastAPI:
       )
 
     conn.execute("DELETE FROM review_queue WHERE track_id = ?", (track_id,))
-    published = row["published_path"]
+    published = was = row["published_path"]
     if published:
-      result = retag(conn, track_id)
+      reset_refreshed()
+      result = retag(conn, track_id, cfg.paths.library)
       published = str(result) if result else published
     else:
       try:
@@ -284,7 +292,15 @@ def create_app(database: Path | None = None) -> FastAPI:
       "UPDATE track SET status='published', updated_at=datetime('now') WHERE id=?",
       (track_id,),
     )
-    return {"ok": True, "published": published}
+    # Say what reached the *file*, not merely what was recorded. Confusing the
+    # two is what made a stranded artwork edit look like a saved one.
+    return {
+      "ok": True,
+      "published": published,
+      "filename": Path(published).name if published else "",
+      "renamed": bool(published) and Path(published) != Path(was or ""),
+      "artwork_replaced": track_id in refreshed_artwork(),
+    }
 
   @app.post("/api/track/{track_id}/url")
   def url_override(track_id: int, body: UrlOverride) -> dict:

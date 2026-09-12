@@ -108,6 +108,49 @@ const api = {
   },
 };
 
+
+/** Say what just happened, in words, for a few seconds.
+ *
+ *  Motion alone cannot carry this. A spring says "something moved"; it cannot
+ *  say *which field* was saved, or — the distinction that actually cost the
+ *  user hours — whether a change reached the database or reached the file.
+ *  Those are separate events here and they read differently. */
+let noticeTimer = 0;
+
+function notice(text, kind = 'saved') {
+  const el = $('notice');
+  if (!el) return;
+  clearTimeout(noticeTimer);
+  el.textContent = text;
+  el.className = `notice ${kind}`;
+  el.hidden = false;
+  if (!reduceMotion) {
+    spring(el, 0, 1, { response: 0.3, onFrame: (v) => {
+      el.style.opacity = String(Math.min(1, Math.max(0, v)));
+      el.style.transform = `translateY(${(1 - v) * -6}px)`;
+    } });
+  }
+  noticeTimer = setTimeout(() => { el.hidden = true; }, kind === 'written' ? 6000 : 3000);
+}
+
+/** Fields edited since the file was last written. */
+const pending = new Set();
+
+function markPending(field) {
+  pending.add(field);
+  renderPending();
+}
+
+function renderPending() {
+  const el = $('pending');
+  if (!el) return;
+  if (!pending.size) { el.hidden = true; return; }
+  const names = [...pending].map((f) => f.replace(/_/g, ' ')).join(', ');
+  el.hidden = false;
+  el.textContent = `${pending.size} unwritten change${pending.size === 1 ? '' : 's'}: ${names}`;
+}
+
+
 const state = { list: [], counts: {}, index: 0, selectedId: null, detail: null,
   field: null, filter: 'review', mode: 'review', question: null, query: '' };
 const $ = (id) => document.getElementById(id);
@@ -198,6 +241,8 @@ async function selectIndex(i) {
   el?.scrollIntoView({ block: 'nearest', behavior: reduceMotion ? 'auto' : 'smooth' });
   state.detail = await api.track(row.id);
   state.field = null;
+  pending.clear();
+  renderPending();
   renderTrack();
 }
 
@@ -282,6 +327,8 @@ function renderTrack() {
     input.addEventListener('focus', () => focusField(input.dataset.field));
     input.addEventListener('change', async () => {
       await api.setField(t.id, input.dataset.field, input.value);
+      markPending(input.dataset.field);
+      notice(`Saved ${input.dataset.field.replace(/_/g, ' ')} — not yet in the file`);
       state.detail = await api.track(t.id);
       renderTrack();
     });
@@ -301,6 +348,8 @@ function renderTrack() {
   for (const img of document.querySelectorAll('.art-choice')) {
     img.addEventListener('click', async () => {
       await api.setField(t.id, 'artwork_url', img.dataset.art);
+      markPending('artwork');
+      notice('Cover chosen — press Re-tag to write it to the file');
       state.detail = await api.track(t.id);
       renderTrack();
     });
@@ -359,7 +408,20 @@ async function acceptCurrent() {
     el.style.transform = `translateY(${v}px)`;
     el.style.opacity = String(Math.max(0, 1 + v / 24));
   } });
-  await api.accept(row.id);
+  const result = await api.accept(row.id);
+  if (result && result.ok) {
+    const parts = [];
+    if (result.artwork_replaced) parts.push('cover replaced');
+    if (result.renamed) parts.push('file renamed');
+    notice(
+      `Written to ${result.filename || 'the file'}${parts.length ? ` — ${parts.join(', ')}` : ''}`,
+      'written',
+    );
+    pending.clear();
+    renderPending();
+  } else if (result) {
+    notice(result.error || 'Nothing was written', 'failed');
+  }
   await loadQueue();
 }
 

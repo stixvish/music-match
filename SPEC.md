@@ -922,6 +922,26 @@ Empty directories are swept after a retag pass. On macOS this needs
 displays, so a folder emptied of music is essentially never empty on disk, and
 a naive `rmdir` prunes nothing at all.
 
+### saved is not written
+
+The ui had one notion of success and the system has two: a change is *recorded*
+in the database the moment it is made, and *written* to the file only when the
+track is accepted or re-tagged. Every confirmation the ui gave was for the
+first, which is how a stranded artwork edit looked exactly like an applied one
+for a day and a half.
+
+Motion cannot carry this distinction. A spring says "something moved"; it
+cannot say which field was saved, or which of the two things happened. So the
+ui now says it in words:
+
+- picking a value → **"Saved title — not yet in the file"**, amber
+- an **unwritten changes** line listing the fields still only in the database
+- pressing Re-tag → **"Written to Arijit Singh - Kesariya.aiff — cover
+  replaced"**, green, and the unwritten list clears
+
+`accept` reports what reached the disk — the filename, whether the file was
+renamed, whether the cover was actually replaced — rather than a bare `ok`.
+
 ### precedence, rebuilt around what each catalogue is good at
 
 Reset 2026-09-12 after working through a real Bollywood-heavy library.

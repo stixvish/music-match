@@ -46,6 +46,7 @@
       <div id="counters"></div>
       <pre id="log" role="log" aria-live="polite" aria-label="Pipeline output"></pre>
     </section>
+    <p id="pending" class="pending" hidden></p>
     <div id="track"></div>
   </section>
 
@@ -64,6 +65,9 @@
   </header>
   <div id="elicit-body"></div>
 </section>
+
+<!-- outside #app: a grid child would become a column -->
+<div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
 
 <script src="/app.js" type="module"></script>
 </body>
