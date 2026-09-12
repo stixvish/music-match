@@ -89,7 +89,9 @@ def test_a_downgraded_stream_retries_once_with_fresh_cookies(monkeypatch):
   monkeypatch.setattr(pipeline, "refresh_cookies", lambda: refreshed.append(True))
 
   ref = VideoRef(video_id="x", title="T", channel="c", duration_s=1)
-  got = pipeline._download_with_fresh_cookies(ref, Config(), None, pipeline.LogBuffer())
+  got = pipeline._download_with_fresh_cookies(
+    ref, Config(), None, pipeline.LogBuffer(), pipeline.Progress()
+  )
   assert got == "ok"
   assert len(attempts) == 2
   assert refreshed == [True]
@@ -111,5 +113,35 @@ def test_it_gives_up_after_one_retry(monkeypatch):
       Config(),
       None,
       pipeline.LogBuffer(),
+      pipeline.Progress(),
     )
   assert len(refreshed) == 1, "refreshed on a loop instead of surfacing it"
+
+
+def test_the_refresh_happens_once_per_run_not_once_per_track():
+  """If every track is downgraded the jar is not the problem.
+
+  Refreshing per failing track would read the keychain 2,300 times over a full
+  library and turn one problem into a second one.
+  """
+  refreshed = []
+  state = pipeline.Progress()
+
+  def always_bad(video_id, dest, cfg, sink=None):  # noqa: ARG001
+    raise QualityError("still below the floor")
+
+  import pytest as _pytest
+
+  with _pytest.MonkeyPatch.context() as m:
+    m.setattr(pipeline, "download", always_bad)
+    m.setattr(pipeline, "refresh_cookies", lambda: refreshed.append(True))
+    for _ in range(5):
+      with _pytest.raises(QualityError):
+        pipeline._download_with_fresh_cookies(
+          VideoRef(video_id="x", title="T", channel="c", duration_s=1),
+          Config(),
+          None,
+          pipeline.LogBuffer(),
+          state,
+        )
+  assert len(refreshed) == 1, f"refreshed {len(refreshed)} times across one run"

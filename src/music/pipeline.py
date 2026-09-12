@@ -177,6 +177,7 @@ class Progress:
   stage: str = ""
   progress_line: str = ""
   finished: bool = False
+  cookies_refreshed: bool = False
   error: str = ""
   failures: list[str] = field(default_factory=list)
 
@@ -479,7 +480,7 @@ def ingest(
         state.skipped += 1
         continue
       step("download", f"[{index}/{len(refs)}] {ref.title[:60]}")
-      item = _download_with_fresh_cookies(ref, cfg, sink, buffer)
+      item = _download_with_fresh_cookies(ref, cfg, sink, buffer, state)
       track_id = register(conn, item)
       state.downloaded += 1
       changed()
@@ -553,7 +554,11 @@ def _set_stage(conn: sqlite3.Connection, track_id: int, stage: str) -> None:
 
 
 def _download_with_fresh_cookies(
-  ref: VideoRef, cfg: config.Config, sink: object, buffer: LogBuffer
+  ref: VideoRef,
+  cfg: config.Config,
+  sink: object,
+  buffer: LogBuffer,
+  state: Progress,
 ) -> Download:
   """Download one track, re-reading cookies once if the stream is downgraded.
 
@@ -572,6 +577,7 @@ def _download_with_fresh_cookies(
     cfg: Runtime configuration.
     sink: yt-dlp logger, so the retry is visible in the console.
     buffer: Run log.
+    state: Run state, which remembers whether the refresh already happened.
 
   Returns:
     The download.
@@ -582,6 +588,12 @@ def _download_with_fresh_cookies(
   try:
     return download(ref.video_id, cfg.paths.staging, cfg.youtube, sink)
   except QualityError as exc:
+    if state.cookies_refreshed:
+      # Already tried. If every track is being downgraded the cause is the
+      # account or the session, not the jar, and re-reading the keychain 2,300
+      # times would turn one problem into a second one.
+      raise
+    state.cookies_refreshed = True
     buffer.add(f"  {exc}", "warn")
     buffer.add("  re-reading cookies and retrying — they may have rotated", "step")
     log.warning("quality floor missed; refreshing cookies and retrying once")

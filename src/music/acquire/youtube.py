@@ -7,6 +7,7 @@ available directly: `channel` and `description` drive art-track detection, and
 
 import atexit
 import logging
+import re
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -160,7 +161,14 @@ def _base_opts(cfg: YouTubeConfig, sink: object | None = None) -> dict[str, obje
     ]
   )
   opts = dict(parsed.ydl_opts)
-  opts.update({"quiet": True, "no_warnings": True, "noprogress": True})
+  # `ignoreerrors` comes back as "only_download" from yt-dlp's CLI defaults,
+  # which swallows every download failure and returns None instead. Combined
+  # with `quiet`, a 403, a geo-block and an expired cookie all surfaced here as
+  # the same useless "yt-dlp returned nothing" — which reads exactly like dead
+  # authentication and is usually not. Let the real error through.
+  opts.update(
+    {"quiet": True, "no_warnings": True, "noprogress": True, "ignoreerrors": False}
+  )
   if sink is not None:
     # yt-dlp writes through a logger object rather than stdout when given one,
     # which is how its real output reaches the web ui instead of a terminal
@@ -211,6 +219,20 @@ def enumerate_playlist(
   return refs
 
 
+def _clean_error(exc: Exception) -> str:
+  """Strip yt-dlp's ANSI codes and prefix so the message reads in a log.
+
+  Args:
+    exc: The raised error.
+
+  Returns:
+    A single readable line.
+  """
+  text = re.sub(r"\x1b\[[0-9;]*m", "", str(exc))
+  text = re.sub(r"^ERROR:\s*", "", text).strip()
+  return " ".join(text.split())[:300]
+
+
 def download(
   video_id: str, dest: Path, cfg: YouTubeConfig, sink: object | None = None
 ) -> Download:
@@ -233,8 +255,12 @@ def download(
   opts = _base_opts(cfg, sink) | {"outtmpl": str(dest / "%(id)s.%(ext)s")}
   url = f"https://www.youtube.com/watch?v={video_id}"
 
-  with yt_dlp.YoutubeDL(opts) as ydl:
-    info = ydl.extract_info(url, download=True)
+  try:
+    with yt_dlp.YoutubeDL(opts) as ydl:
+      info = ydl.extract_info(url, download=True)
+  except yt_dlp.utils.DownloadError as exc:
+    # carry yt-dlp's own words: they name the cause, and the caller logs them
+    raise RuntimeError(f"{video_id}: {_clean_error(exc)}") from exc
   if not info:
     raise RuntimeError(f"yt-dlp returned nothing for {video_id}")
 

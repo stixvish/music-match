@@ -1283,6 +1283,32 @@ return **422 with the reason** rather than a silent success. The track keeps
 its place in the review list with the stale reason cleared, since accepting it
 is still the user's call.
 
+### a failure that read as dead cookies
+
+`_base_opts` builds its options through `yt_dlp.parse_options`, which inherits
+the CLI default `ignoreerrors = "only_download"`. Download failures were
+therefore swallowed, `extract_info` returned `None`, and the only thing that
+reached the user was:
+
+```
+premium audio  FAILED — yt-dlp returned nothing for u9W7FC0D-kg
+```
+
+A 403, a geo-block, a rate limit and a genuinely expired cookie all surfaced as
+that one sentence — which reads exactly like dead authentication, and usually
+is not. The failure that prompted this was transient: metadata extraction
+worked, itag 141 was listed at 257 kbps, and the same download succeeded
+moments later.
+
+`ignoreerrors` is now off and yt-dlp's own message is carried through, so
+"Video unavailable" says so.
+
+**The cookie refresh is also bounded to once per run.** A downgrade below the
+bitrate floor triggers one re-read; if every track is being downgraded the
+cause is the account or the session, not the jar, and refreshing per failing
+track would read the keychain 2,329 times over a full library — turning one
+problem into a second one.
+
 ### the PO token warning, and why it is not yet a problem
 
 yt-dlp 2026.08.19 warns on every fetch:
