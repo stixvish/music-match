@@ -891,6 +891,24 @@ collaboration — MusicBrainz joins the two with `&`, not `feat.`, and it is
 right. The catalogue's own distinction is the authority; inferring one from
 adjacent fields is not.
 
+### the server must not hold stale code
+
+`music serve` ran a single in-process app, so a server started before a code
+change kept executing the old one indefinitely. That is invisible from the
+browser: the ui saved the artwork choice, the database recorded it, the
+endpoint returned success, and the file never changed — because the running
+process still held the previous `retag`. The server in question had been up for
+six hours across the fix that would have made it work.
+
+`serve` now reloads on source changes by default (`--no-reload` opts out).
+Verified by injecting a route into a running server and reaching it without a
+restart.
+
+The wider lesson is the one this project keeps relearning: **a silent
+success is worse than a failure.** The same shape appears in the pasted link
+that was recorded and never read, and in `retag` preserving the cover it was
+asked to replace.
+
 ### convention is not consensus
 
 Indian film music credits the **music director** as the track artist. iTunes

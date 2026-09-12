@@ -15,3 +15,15 @@ def test_subcommand_is_required():
 
   with pytest.raises(SystemExit):
     cli.build_parser().parse_args([])
+
+
+def test_serve_reloads_by_default():
+  """A local tool edited while it runs must not hold stale code.
+
+  The review ui saved artwork correctly, reported success, and never changed
+  the file — because the running server still held the previous `retag` in
+  memory. Nothing about that is visible from the browser.
+  """
+  args = cli.build_parser().parse_args(["serve"])
+  assert args.no_reload is False
+  assert cli.build_parser().parse_args(["serve", "--no-reload"]).no_reload is True

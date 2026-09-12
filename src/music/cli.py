@@ -144,7 +144,23 @@ def cmd_serve(args: argparse.Namespace) -> int:
     port = found
 
   log.info("review ui: http://127.0.0.1:%d", port)
-  uvicorn.run(create_app(), host="127.0.0.1", port=port, log_level="warning")
+  if args.no_reload:
+    uvicorn.run(create_app(), host="127.0.0.1", port=port, log_level="warning")
+    return 0
+
+  # Reload on source changes by default. This is a local tool that is edited
+  # while it runs, and a server holding stale code is invisible: the ui saves
+  # correctly, reports success, and the file never changes because the *old*
+  # `retag` is still in memory. That cost hours once.
+  uvicorn.run(
+    "music.web:create_app",
+    factory=True,
+    host="127.0.0.1",
+    port=port,
+    log_level="warning",
+    reload=True,
+    reload_dirs=[str(Path(__file__).resolve().parent)],
+  )
   return 0
 
 
@@ -306,6 +322,11 @@ def build_parser() -> argparse.ArgumentParser:
     ("review", "alias for serve"),
   ):
     sp = sub.add_parser(parser_name, help=helptext)
+    sp.add_argument(
+      "--no-reload",
+      action="store_true",
+      help="do not restart when the source changes",
+    )
     sp.add_argument("--port", type=int, default=8765)
     sp.add_argument(
       "--strict-port",
