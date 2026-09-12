@@ -853,6 +853,21 @@ cases where MusicBrainz correctly chose the *album* while iTunes and Spotify
 offered the *single* — `Icarus II` against `June - Single` — so no source held
 the right cover at all.
 
+**iTunes' release-type suffix is not a different record.** iTunes writes
+`June - Single` and `YES - EP` where Spotify and MusicBrainz write the bare
+title. Left unmerged the two look like separate releases, so iTunes was
+excluded from the cover choice and a 640x640 Spotify image won over a
+1200x1200 one *of the same artwork*. 12 of 120 tracks were losing quality this
+way. `_album_key` now strips the suffix, which requires the dash — an album
+genuinely called "The EP" is untouched, and `Blonde` still does not match
+`Pink + White - Single`.
+
+After the fix, an audit of every remaining Spotify cover: **53 are releases
+iTunes genuinely did not match** (`channel ORANGE` against iTunes'
+`Point Blank`, `Planet Pit (Deluxe)` against `Ultra Dance 13`) and **7 are
+tracks iTunes offered no cover for at all**. Zero are the same release, so the
+quality ordering is now doing everything it can.
+
 **Release-accuracy is enforced first, then quality.** Every source that named
 the album we tagged is equally correct, so among *those* the ranking is free to
 be about image quality. Measured 2026-09-11: iTunes serves 1200x1200 at

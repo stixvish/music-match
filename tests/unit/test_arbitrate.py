@@ -875,3 +875,36 @@ def test_world_still_takes_the_performer_from_musicbrainz():
   )
   assert got["artist"][0] == "Arijit Singh"
   assert got["title"][0] == "Sanam Re"
+
+
+def test_an_itunes_release_type_suffix_is_not_a_different_album():
+  """The `- Single` suffix is iTunes' own wording, not a different record.
+
+  Left unmerged, the two are different releases, so iTunes is excluded from
+  the cover choice and a 640x640 Spotify image beats a 1200x1200 one for the
+  same record. 12 of 120 tracks were losing quality this way.
+  """
+  from music.arbitrate import _album_key
+
+  assert _album_key("June") == _album_key("June - Single")
+  assert _album_key("YES") == _album_key("YES - EP")
+  # the dash is required, so an album genuinely called "The EP" is untouched
+  assert _album_key("The EP") != _album_key("Something Else")
+  # and a different record stays different
+  assert _album_key("Blonde") != _album_key("Pink + White - Single")
+
+
+def test_itunes_artwork_wins_once_the_release_matches():
+  got = resolved(
+    arbitrate(
+      [
+        cand("album", "June", "spotify"),
+        cand("artwork_url", "https://spotify/june.jpg", "spotify"),
+        cand("album", "June - Single", "itunes"),
+        cand("artwork_url", "https://itunes/june.jpg", "itunes"),
+      ],
+      family="hip-hop",
+    )
+  )
+  assert got["album"][0] == "June"
+  assert got["artwork_url"][0] == "https://itunes/june.jpg"

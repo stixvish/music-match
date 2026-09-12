@@ -104,6 +104,15 @@ _EDITION_TAIL = re.compile(
 # far more often than it is an edition ("Kidz Bop 22", "Blink-182").
 _VERSION_TAIL = re.compile(r"\s+\d+\.\d+\s*$")
 
+# iTunes appends the release type to the album name — `June - Single`,
+# `YES - EP` — where Spotify and MusicBrainz use the bare title. Left in, the
+# two describe the same record under different keys, so iTunes is excluded from
+# the cover choice and a 640x640 Spotify image wins over a 1200x1200 one.
+# Requires the dash, so an album actually called "The EP" is untouched.
+_RELEASE_TYPE_TAIL = re.compile(
+  r"\s*[-\u2013\u2014]\s*(?:single|ep)\s*$", re.IGNORECASE
+)
+
 
 def _album_key(title: str) -> str:
   """Group editions of one album together.
@@ -116,7 +125,7 @@ def _album_key(title: str) -> str:
   Returns:
     A normalised grouping key.
   """
-  base = _EDITION_SUFFIX.sub("", title or "")
+  base = _RELEASE_TYPE_TAIL.sub("", _EDITION_SUFFIX.sub("", title or ""))
   # strip repeatedly: "Nothing But the Beat 2.0 (Deluxe)" carries both forms
   for pattern in (_VERSION_TAIL, _EDITION_TAIL):
     while True:
