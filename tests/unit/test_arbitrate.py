@@ -798,3 +798,80 @@ def test_artwork_is_kept_when_no_source_matches_the_album():
 def test_no_artwork_anywhere_resolves_to_nothing():
   got = resolved(arbitrate([cand("album", "Some Album", "musicbrainz")], family="pop"))
   assert "artwork_url" not in got
+
+
+# --- featured artists survive whoever wins the title ------------------------
+
+
+def test_a_guest_survives_a_title_that_omits_it():
+  """The real case: Spotify leads title and drops the feature.
+
+  MusicBrainz is the only source that states who is featured — §7 ranks it
+  first for credits for exactly that — but it no longer wins `title`, so
+  `Time of Our Lives (feat. Ne-Yo)` came out as `Time of Our Lives`.
+  """
+  got = resolved(
+    arbitrate(
+      [
+        cand("artist", "Pitbull", "spotify"),
+        cand("title", "Time of Our Lives", "spotify"),
+        cand("title", "Time of Our Lives (feat. Ne-Yo)", "musicbrainz"),
+        cand("featured_artists", "Ne-Yo", "musicbrainz"),
+      ],
+      family="pop",
+    )
+  )
+  assert got["title"][0] == "Time of Our Lives (feat. Ne-Yo)"
+  assert got["artist"][0] == "Pitbull"
+
+
+def test_a_guest_already_in_the_title_is_not_repeated():
+  got = resolved(
+    arbitrate(
+      [
+        cand("title", "All That (feat. Channel Tres)", "spotify"),
+        cand("artist", "Emotional Oranges", "spotify"),
+        cand("featured_artists", "Channel Tres", "musicbrainz"),
+      ],
+      family="r&b-soul",
+    )
+  )
+  assert got["title"][0].count("Channel Tres") == 1
+
+
+def test_a_collaborator_on_the_artist_line_is_not_moved_to_the_title():
+  """Only a name that is *missing* is added; the artist line is authoritative."""
+  got = resolved(
+    arbitrate(
+      [
+        cand("title", "Give Me Everything", "spotify"),
+        cand("artist", "Pitbull, Ne-Yo, Afrojack & Nayer", "spotify"),
+        cand("featured_artists", "Nayer", "musicbrainz"),
+      ],
+      family="pop",
+    )
+  )
+  assert got["title"][0] == "Give Me Everything"
+
+
+def test_featured_artists_never_becomes_a_tag():
+  """It is provenance for the rule above, not an ID3 frame."""
+  from music.publish.fields import NON_TAG_FIELDS
+
+  assert "featured_artists" in NON_TAG_FIELDS
+
+
+def test_world_still_takes_the_performer_from_musicbrainz():
+  """Bollywood credits the music director; the singer is what a DJ sorts by."""
+  got = resolved(
+    arbitrate(
+      [
+        cand("artist", "Mithoon", "spotify"),
+        cand("artist", "Arijit Singh", "musicbrainz"),
+        cand("title", "Sanam Re", "spotify"),
+      ],
+      family="world",
+    )
+  )
+  assert got["artist"][0] == "Arijit Singh"
+  assert got["title"][0] == "Sanam Re"

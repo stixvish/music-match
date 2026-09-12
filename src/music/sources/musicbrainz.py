@@ -15,6 +15,7 @@ from collections.abc import Sequence
 from pydantic import ValidationError
 
 from music.identify import Evidence, Match, distinct_rival_gap, variant_mismatch
+from music.normalise import extract_featured
 from music.publish.naming import format_artists
 from music.sources import cache
 from music.sources.base import FieldCandidate, Identity, ReleaseInfo
@@ -357,6 +358,13 @@ class MusicBrainz:
   ) -> Sequence[FieldCandidate]:
     act, featured = split_credit(top.get("artist-credit"))
     title = str(top.get("title", ""))
+    # MusicBrainz states who is featured in two places — the join phrase
+    # between credited names, and the title's own `(feat. ...)` clause — and it
+    # is the only source that distinguishes a guest from a collaborator at all.
+    # Spotify returns the primary artist and sometimes drops the guest from the
+    # title too, so `Time of Our Lives (feat. Ne-Yo)` came out as
+    # `Time of Our Lives` once Spotify led both fields (SPEC.md §7).
+    featured = tuple(dict.fromkeys([*featured, *extract_featured(title)]))
     # the guest belongs in the title, in house style (SPEC.md §14). MusicBrainz
     # puts it in the credit instead, so `Neverender` came through with no sign
     # of Tame Impala anywhere on the tag.
@@ -368,6 +376,12 @@ class MusicBrainz:
         field="artist", value=act or _credit_name(top.get("artist-credit")), source=NAME
       ),
     ]
+    if featured:
+      candidates.append(
+        FieldCandidate(
+          field="featured_artists", value=format_artists(featured), source=NAME
+        )
+      )
     if top.get("id"):
       candidates.append(
         FieldCandidate(field="mb_recording_id", value=str(top["id"]), source=NAME)

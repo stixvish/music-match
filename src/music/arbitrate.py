@@ -19,7 +19,7 @@ import sqlite3
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 
-from music.publish.naming import split_artists, strip_version
+from music.publish.naming import format_artists, split_artists, strip_version
 from music.sources.base import ALBUM_GROUP, FieldCandidate
 
 # Fields where agreement between sources is evidence rather than mere
@@ -160,6 +160,8 @@ _BASE: dict[str, tuple[str, ...]] = {
   "remixer": ("derived", "musicbrainz", "discogs"),
   "mix_name": ("derived", "musicbrainz"),
   "original_artist": ("musicbrainz",),
+  # only musicbrainz distinguishes a guest from a collaborator
+  "featured_artists": ("musicbrainz",),
   # quality order, consulted only among sources that named the same release;
   # release-accuracy is enforced first, in `_artwork_for`.
   "artwork_url": ("itunes", "spotify", "musicbrainz"),
@@ -498,7 +500,7 @@ def arbitrate(
     spare = options[0]
     decisions.append(Decision(field, spare.value, spare.source, decided_by="fallback"))
 
-  return sorted(decisions, key=lambda d: d.field)
+  return sorted(_carry_features(decisions), key=lambda d: d.field)
 
 
 def _consensus(
@@ -668,6 +670,54 @@ def _artwork_for(
       return owned
 
   return by_precedence(usable)
+
+
+def _carry_features(decisions: list[Decision]) -> list[Decision]:
+  """Make sure a featured guest survives whichever source won the title.
+
+  MusicBrainz is the only source that states who is featured — §7 ranks it
+  first for credits for exactly this reason — but it no longer wins `title`,
+  and Spotify, which does, routinely omits the guest. `Time of Our Lives
+  (feat. Ne-Yo)` came out as `Time of Our Lives`.
+
+  This is not the album-artist inference that was tried and removed. That
+  guessed feature-ness from adjacent fields and mislabelled collaborations;
+  this carries an explicit statement — a `feat.` join phrase or a `(feat. ...)`
+  clause — onto a title chosen elsewhere. A name already in the title or
+  already on the artist line is never added.
+
+  Args:
+    decisions: Arbitrated fields.
+
+  Returns:
+    The same fields, with the title carrying any guest it was missing.
+  """
+  by_field = {d.field: d for d in decisions}
+  featured, title = by_field.get("featured_artists"), by_field.get("title")
+  if not (featured and title):
+    return decisions
+
+  known = _norm(title.value)
+  artist = by_field.get("artist")
+  lead = {_norm(n) for n in split_artists(artist.value)} if artist else set()
+  missing = [
+    name
+    for name in split_artists(featured.value)
+    if _norm(name) not in known and _norm(name) not in lead
+  ]
+  if not missing:
+    return decisions
+
+  out = [d for d in decisions if d.field != "title"]
+  out.append(
+    Decision(
+      "title",
+      f"{title.value} (feat. {format_artists(missing)})",
+      title.source,
+      title.decided_by,
+    )
+  )
+  return out
 
 
 def _is_non_label(value: str) -> bool:

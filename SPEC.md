@@ -922,6 +922,36 @@ Empty directories are swept after a retag pass. On macOS this needs
 displays, so a folder emptied of music is essentially never empty on disk, and
 a naive `rmdir` prunes nothing at all.
 
+### the guest outlives the title that dropped it
+
+Spotify leads `title` outside electronic and routinely omits the featured
+credit; MusicBrainz keeps it but no longer wins the field. `Time of Our Lives
+(feat. Ne-Yo)` therefore resolved to `Time of Our Lives`, with Ne-Yo appearing
+nowhere on the tag.
+
+MusicBrainz states who is featured in two places — the join phrase between
+credited names, and the title's own `(feat. ...)` clause — and it is the only
+source that distinguishes a guest from a collaborator at all. Both are now read
+into a `featured_artists` candidate, and arbitration carries any missing name
+onto whichever title won.
+
+**This is not the album-artist inference that was tried and removed.** That
+guessed feature-ness from adjacent fields and mislabelled a collaboration on a
+solo album; this carries an *explicit statement* onto a title chosen elsewhere.
+A name already in the title, or already on the artist line, is never added —
+so `Pitbull, Ne-Yo, Afrojack & Nayer` keeps its collaborators on the artist
+line and gains nothing in the title.
+
+The division of labour that results:
+
+| | artist | who is featured |
+|---|---|---|
+| **world** | MusicBrainz — the singer, not the music director | MusicBrainz |
+| **everything else** | Spotify — the primary credit | MusicBrainz |
+
+Spotify decides *who the act is*; MusicBrainz decides *who is a guest*. Each
+source answers the question it is actually good at.
+
 ### saved is not written
 
 The ui had one notion of success and the system has two: a change is *recorded*

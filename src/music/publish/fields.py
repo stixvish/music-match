@@ -17,6 +17,7 @@ NON_TAG_FIELDS = frozenset(
     "artwork_url",
     "catalog_number",
     "classifier_genre",
+    "featured_artists",
     "genre_style",
     "mb_recording_id",
     "acoustid",
