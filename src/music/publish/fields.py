@@ -25,6 +25,41 @@ NON_TAG_FIELDS = frozenset(
 )
 
 
+# Every field the review ui offers, grouped for scanning and ordered for
+# reading. Derived from `tag.FRAME_MAP` rather than hand-listed there and here:
+# the ui was missing `grouping` and `original_artist` because the two drifted,
+# and a field you cannot see is a field you cannot fill in.
+FIELD_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
+  ("track", ("title", "artist", "mix_name", "remixer", "original_artist")),
+  (
+    "release",
+    (
+      "album",
+      "album_artist",
+      "track_number",
+      "disc_number",
+      "year",
+      "release_date",
+      "label",
+      "isrc",
+    ),
+  ),
+  ("classification", ("genre", "grouping", "key", "bpm")),
+  ("credits", ("composer", "lyricist")),
+  ("notes", ("comment",)),
+  ("artwork", ("artwork_url",)),
+)
+
+# Writable but not in `tag.FRAME_MAP`, because `build` handles it specially.
+# Deriving the ui's list from FRAME_MAP alone therefore missed it, and Rekordbox
+# and Serato both display it (SPEC.md §10).
+EXTRA_WRITABLE: tuple[str, ...] = ("comment",)
+
+EDITABLE_ORDER: tuple[str, ...] = tuple(
+  field for _group, names in FIELD_GROUPS for field in names
+)
+
+
 @dataclass(frozen=True)
 class Built:
   """A tag set plus what was left out and why."""

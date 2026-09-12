@@ -56,3 +56,48 @@ def test_non_tag_fields_are_declared_not_guessed():
   """These live in the database for provenance but have no ID3 frame."""
   for field in NON_TAG_FIELDS:
     assert field not in tag.FRAME_MAP
+
+
+# --- the ui offers every field the tag can hold ----------------------------
+
+
+def test_every_writable_field_is_offered_in_the_ui():
+  """A field you cannot see is a field you cannot fill in.
+
+  The ui kept its own hand-written list and drifted from the tag writer:
+  `grouping` and `original_artist` were writable but never shown, so no value
+  could be typed into them.
+  """
+  from music.publish.fields import EDITABLE_ORDER
+  from music.publish.tag import FRAME_MAP
+
+  assert set(FRAME_MAP) <= set(EDITABLE_ORDER)
+
+
+def test_nothing_unwritable_is_offered():
+  """Everything offered must be able to reach the file.
+
+  `comment` is writable but absent from FRAME_MAP — `build` handles it
+  specially — so deriving the list from FRAME_MAP alone silently dropped a
+  field that both Rekordbox and Serato display.
+  """
+  from music.publish.fields import EDITABLE_ORDER, EXTRA_WRITABLE
+  from music.publish.tag import FRAME_MAP
+
+  unexplained = set(EDITABLE_ORDER) - set(FRAME_MAP) - set(EXTRA_WRITABLE)
+  assert unexplained == {"artwork_url"}
+
+
+def test_comment_reaches_the_tag():
+  """It renders in both apps, so it has to survive `build`."""
+  from music.publish.fields import build
+
+  assert build({"comment": "cue at 1:04"}).tags.comment == "cue at 1:04"
+
+
+def test_the_groups_cover_the_order_exactly():
+  from music.publish.fields import EDITABLE_ORDER, FIELD_GROUPS
+
+  flat = [f for _name, names in FIELD_GROUPS for f in names]
+  assert flat == list(EDITABLE_ORDER)
+  assert len(flat) == len(set(flat)), "a field appears in two groups"

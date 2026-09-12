@@ -12,6 +12,7 @@ from pydantic import BaseModel
 from music import config, db, elicit, pipeline
 from music.arbitrate import Decision, arbitrate, persist
 from music.publish import (
+  fields,
   naming,
   publish_track,
   refreshed_artwork,
@@ -248,6 +249,11 @@ def create_app(database: Path | None = None) -> FastAPI:
       row["display"] = _house_style(row["field"], row["value"])
     return {
       "track": dict(head),
+      # the ui shows every editable field, filled or not, so a value no source
+      # offered can still be typed in
+      "groups": [
+        {"name": name, "fields": list(names)} for name, names in fields.FIELD_GROUPS
+      ],
       "resolved": resolved,
       "candidates": candidates,
       "preview": preview,

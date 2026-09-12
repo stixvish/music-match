@@ -1019,6 +1019,28 @@ The division of labour that results:
 Spotify decides *who the act is*; MusicBrainz decides *who is a guest*. Each
 source answers the question it is actually good at.
 
+### every field, always
+
+The review ui listed only fields that some source had offered, so `mix_name`
+appeared on one track and was absent from the next — and a field that is not
+shown cannot be typed into, which is exactly when you need it.
+
+All 21 editable fields are now shown on every track, grouped (track, release,
+classification, credits, notes, artwork) because twenty undifferentiated rows
+scan worse than five groups. Empty ones are dimmed and dashed: available, not
+missing.
+
+The list is **derived from the tag writer and served by the api**, not
+hand-written in the ui. It had already drifted twice:
+
+- `grouping` and `original_artist` are in `FRAME_MAP` and were never shown
+- `comment` is writable but *not* in `FRAME_MAP` — `build` handles it
+  specially — so deriving from `FRAME_MAP` alone still missed it, and §10
+  measured it rendering in **both** Rekordbox and Serato
+
+Two tests hold the two halves: everything writable is offered, and nothing
+offered is unwritable.
+
 ### the ui shows what will be written
 
 House style is applied at publish time, so `resolved_field` keeps the literal

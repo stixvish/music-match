@@ -263,11 +263,12 @@ function renderTrack() {
   $('track-meta').textContent =
     `${t.genre_family || 'unrouted'} · confidence ${t.identity_confidence ?? '—'}`;
 
-  const order = ['title', 'artist', 'album', 'album_artist', 'genre', 'label',
-    'track_number', 'disc_number', 'year', 'release_date', 'isrc',
-    'mix_name', 'remixer', 'composer', 'lyricist', 'key', 'bpm', 'artwork_url'];
-  const fields = order.filter(
-    (f) => resolved[f] || preview[f] || d.candidates.some((c) => c.field === f));
+  // Every editable field, filled or not. A value no source offered is exactly
+  // the one you need to be able to type in, and hiding empties made `mix_name`
+  // appear on one track and vanish on the next. The grouping comes from the
+  // server so it cannot drift from what the tag writer can actually write.
+  const groups = d.groups || [];
+  const fields = groups.flatMap((g) => g.fields);
 
   const artUrls = [...new Set(d.candidates
     .filter((c) => c.field === 'artwork_url' && c.value).map((c) => c.value))];
@@ -303,7 +304,9 @@ function renderTrack() {
       <button class="danger" id="reject" title="Delete the audio and never download it again">Delete</button>
       <input class="url" id="url" type="text" placeholder="Paste a Spotify / MusicBrainz / Discogs link…">
     </div>
-    ${fields.map((f) => {
+    ${groups.map((group) => `
+      <div class="group-label">${esc(group.name)}</div>
+      ${group.fields.map((f) => {
       const r = resolved[f];
       const by = r?.decided_by === 'manual' ? 'manual'
         : r?.decided_by === 'fallback' ? 'fallback' : '';
@@ -320,7 +323,7 @@ function renderTrack() {
                placeholder="${esc(p?.value ?? opts[0]?.value ?? '')}" data-field="${f}">
         <span class="src ${by}">${esc(r?.source ?? hint)}${by ? ` · ${by}` : ''}</span>
       </div>`;
-    }).join('')}
+    }).join('')}`).join('')}
     <p class="label" style="margin-top:1rem">
       <kbd>j</kbd>/<kbd>k</kbd> move · <kbd>space</kbd> play · <kbd>tab</kbd> field ·
       <kbd>↵</kbd> accept · <kbd>esc</kbd> leave a field
