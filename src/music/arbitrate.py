@@ -129,19 +129,32 @@ def _album_key(title: str) -> str:
 
 # default ranking per field, before elicitation calibrates it (SPEC.md §9).
 _BASE: dict[str, tuple[str, ...]] = {
-  "title": ("musicbrainz", "spotify", "itunes", "discogs"),
-  "artist": ("musicbrainz", "spotify", "itunes", "discogs"),
-  "album": ("musicbrainz", "spotify", "itunes"),
-  "album_artist": ("musicbrainz", "spotify", "itunes"),
-  "track_number": ("musicbrainz", "spotify", "itunes"),
-  "disc_number": ("musicbrainz", "spotify", "itunes"),
+  # Spotify leads the identity fields for everything that is not electronic.
+  # It is the catalogue the user checks a track against, it credits performers
+  # rather than composers, and MusicBrainz — which led these before — is the
+  # source whose Bollywood coverage is thinnest.
+  "title": ("spotify", "musicbrainz", "itunes", "discogs"),
+  "artist": ("spotify", "musicbrainz", "itunes", "discogs"),
+  "album": ("spotify", "musicbrainz", "itunes"),
+  "album_artist": ("spotify", "musicbrainz", "itunes"),
+  "track_number": ("spotify", "musicbrainz", "itunes"),
+  "disc_number": ("spotify", "musicbrainz", "itunes"),
   # the earliest release across singles and albums, not the album's date (§7)
-  "release_date": ("musicbrainz", "spotify", "itunes"),
-  "year": ("musicbrainz", "spotify", "itunes"),
-  "genre": ("discogs", "musicbrainz", "itunes", "essentia"),
-  "label": ("discogs", "musicbrainz"),
-  "catalog_number": ("discogs",),
-  "isrc": ("spotify", "musicbrainz"),
+  "release_date": ("spotify", "musicbrainz", "itunes"),
+  "year": ("spotify", "musicbrainz", "itunes"),
+  # iTunes first, always. Its vocabulary is coarse and DJ-shaped, and it is the
+  # only source that treats Bollywood as a genre rather than smearing it across
+  # `Stage & Screen`, `Folk, World, & Country` and `Pop`: 46 of 49 world tracks
+  # correct, against 0 for the classifier (SPEC.md §7).
+  "genre": ("itunes", "discogs", "musicbrainz", "essentia"),
+  # the styles that are too fine for `genre` are kept here instead
+  "genre_style": ("discogs", "beatport"),
+  # Discogs describes the pressing it catalogued, which is often a reissue or a
+  # regional licensee; iTunes and Spotify report the label that released the
+  # recording the user is actually holding.
+  "label": ("itunes", "spotify", "discogs", "musicbrainz"),
+  "catalog_number": ("discogs", "beatport"),
+  "isrc": ("spotify", "musicbrainz", "itunes"),
   "composer": ("musicbrainz",),
   "lyricist": ("musicbrainz",),
   "remixer": ("derived", "musicbrainz", "discogs"),
@@ -157,25 +170,35 @@ _BASE: dict[str, tuple[str, ...]] = {
 # per-family departures from the base ranking (SPEC.md §7).
 _OVERRIDES: dict[str, dict[str, tuple[str, ...]]] = {
   "electronic": {
-    # beatport is often the only source that knows the version exists
-    "title": ("beatport", "musicbrainz", "spotify", "discogs"),
+    # Beatport leads the identity fields here for the same reason Spotify
+    # leads elsewhere: it is the catalogue this music is actually released
+    # into, and it is often the only source that knows a given version exists.
+    "title": ("beatport", "spotify", "musicbrainz", "discogs"),
+    "artist": ("beatport", "spotify", "musicbrainz", "discogs"),
+    "album": ("beatport", "spotify", "musicbrainz", "itunes"),
+    "album_artist": ("beatport", "spotify", "musicbrainz", "itunes"),
+    "track_number": ("beatport", "spotify", "musicbrainz", "itunes"),
+    "disc_number": ("beatport", "spotify", "musicbrainz", "itunes"),
     "mix_name": ("derived", "beatport", "musicbrainz"),
     "remixer": ("derived", "beatport", "musicbrainz", "discogs"),
-    "genre": ("beatport", "discogs", "musicbrainz", "essentia"),
-    "label": ("beatport", "discogs", "musicbrainz"),
+    # iTunes still leads the genre: the house style is coarse buckets, and
+    # beatport's sub-genres belong in `genre_style` alongside discogs'.
+    "genre": ("itunes", "beatport", "discogs", "musicbrainz", "essentia"),
+    "genre_style": ("beatport", "discogs"),
+    "label": ("beatport", "itunes", "spotify", "discogs"),
     "catalog_number": ("beatport", "discogs"),
   },
   "world": {
     # itunes has the strongest catalogue for regional music, where
     # musicbrainz and discogs are both thin (§7)
-    "title": ("itunes", "musicbrainz", "spotify", "discogs"),
+    "title": ("spotify", "itunes", "musicbrainz", "discogs"),
     # musicbrainz first for the performer: itunes and spotify both credit the
     # music director, which is the film-industry convention, not the singer
-    "artist": ("musicbrainz", "itunes", "spotify"),
-    "album": ("itunes", "musicbrainz", "spotify"),
-    "album_artist": ("itunes", "musicbrainz", "spotify"),
-    "track_number": ("itunes", "musicbrainz", "spotify"),
-    "disc_number": ("itunes", "musicbrainz", "spotify"),
+    "artist": ("musicbrainz", "spotify", "itunes"),
+    "album": ("spotify", "itunes", "musicbrainz"),
+    "album_artist": ("spotify", "itunes", "musicbrainz"),
+    "track_number": ("spotify", "itunes", "musicbrainz"),
+    "disc_number": ("spotify", "itunes", "musicbrainz"),
     "genre": ("itunes", "discogs", "musicbrainz", "essentia"),
   },
 }
@@ -464,11 +487,14 @@ def arbitrate(
         (c for source in ranked for c in options if c.source == source), None
       )
     if winner is not None:
-      decisions.append(Decision(field, winner.value, winner.source))
+      # A source that is not in the table won by falling through. That must
+      # stay visible: `_consensus` returns a lone candidate whatever its
+      # source, so without this check an unranked answer is silently recorded
+      # as though precedence had chosen it.
+      how = "precedence" if winner.source in ranked else "fallback"
+      decisions.append(Decision(field, winner.value, winner.source, decided_by=how))
       continue
-    # no ranked source had a value. take an unranked one rather than lose the
-    # field, but mark it so it can be audited — this is how itunes' coarse
-    # "Dance" won genre on an electronic track.
+    # no ranked source had a value at all
     spare = options[0]
     decisions.append(Decision(field, spare.value, spare.source, decided_by="fallback"))
 

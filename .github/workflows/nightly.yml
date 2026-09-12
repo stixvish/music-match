@@ -12,9 +12,16 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v10.1.0
-      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg libchromaprint-tools
       - run: uv sync --all-groups
-      - name: essentia + model download
-        run: uv run pytest -m live -k "classify or model"
-      - name: source adapters against real apis
-        run: uv run pytest -m live -k "sources"
+      - name: essentia model downloads and classifies
+        run: uv run pytest -m live tests/live/test_classify_live.py -v
+      - name: source adapters against the real apis
+        # credentialed sources skip when the secret is absent, so this is
+        # useful with no secrets and more useful with them
+        env:
+          ACOUSTID_API_KEY: ${{ secrets.ACOUSTID_API_KEY }}
+          DISCOGS_TOKEN: ${{ secrets.DISCOGS_TOKEN }}
+          SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
+          SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
+        run: uv run pytest -m live tests/live/test_sources_live.py -v

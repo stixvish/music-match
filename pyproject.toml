@@ -75,6 +75,11 @@ strict_equality = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# `live` tests hit real apis and models, so they are excluded from every
+# ordinary run and selected explicitly by the nightly. The marker existed and
+# was documented as excluded; nothing actually excluded it, so the day live
+# tests were written they would have started failing local runs and CI.
+addopts = "-m 'not live'"
 markers = [
   "live: hits real networks/models. excluded from ci (SPEC.md §19)",
   "slow: seconds, not milliseconds",

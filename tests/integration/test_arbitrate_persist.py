@@ -72,13 +72,14 @@ def test_manual_edit_blocks_only_its_own_field(conn):
 
 def test_calibrated_table_overrides_the_defaults(conn):
   """The elicitation exercise populates `precedence` (SPEC.md §9)."""
-  assert load_precedence(conn, "pop", "genre")[0] == "discogs"
+  assert load_precedence(conn, "pop", "genre")[0] == "itunes"
   conn.execute(
     "INSERT INTO precedence (genre_family, field, rank, source)"
-    " VALUES ('pop', 'genre', 1, 'itunes')"
+    " VALUES ('pop', 'genre', 1, 'discogs')"
   )
-  assert load_precedence(conn, "pop", "genre") == ("itunes",)
+  assert load_precedence(conn, "pop", "genre") == ("discogs",)
 
 
 def test_defaults_apply_when_uncalibrated(conn):
-  assert load_precedence(conn, "electronic", "genre")[0] == "beatport"
+  assert load_precedence(conn, "electronic", "genre")[0] == "itunes"
+  assert load_precedence(conn, "electronic", "title")[0] == "beatport"

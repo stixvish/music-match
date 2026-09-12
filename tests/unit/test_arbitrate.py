@@ -32,12 +32,15 @@ def test_lower_ranked_source_fills_a_gap():
   assert got["genre"] == ("Pop", "musicbrainz")
 
 
-def test_beatport_leads_genre_for_electronic_only():
-  assert precedence_for("electronic", "genre")[0] == "beatport"
-  assert precedence_for("pop", "genre")[0] == "discogs"
+def test_itunes_leads_genre_everywhere():
+  assert precedence_for("electronic", "genre")[0] == "itunes"
+  assert precedence_for("pop", "genre")[0] == "itunes"
+  assert precedence_for("world", "genre")[0] == "itunes"
+  # beatport's sub-genres are not discarded; they move to genre_style
+  assert precedence_for("electronic", "genre_style")[0] == "beatport"
 
 
-def test_itunes_leads_for_world_except_the_performer():
+def test_world_keeps_the_performer_credit():
   """ITunes has the strongest regional catalogue, but not the right convention.
 
   Coverage and credit convention are different questions. Indian film music
@@ -45,10 +48,12 @@ def test_itunes_leads_for_world_except_the_performer():
   MusicBrainz names the singer — so `artist` is the one field where iTunes does
   not lead this family.
   """
-  for field in ("title", "album", "genre"):
-    assert precedence_for("world", field)[0] == "itunes"
+  assert precedence_for("world", "genre")[0] == "itunes"
+  # spotify leads identity, as everywhere outside electronic
+  for field in ("title", "album", "album_artist"):
+    assert precedence_for("world", field)[0] == "spotify"
+  # except the performer, which is the whole point of the world override
   assert precedence_for("world", "artist")[0] == "musicbrainz"
-  assert precedence_for("world", "album_artist")[0] == "itunes"
 
 
 def test_two_catalogues_sharing_a_convention_do_not_outvote_the_performer():
@@ -153,10 +158,10 @@ def test_album_group_does_not_mix_even_when_one_source_is_partial():
     family="pop",
   )
   got = resolved(decisions)
-  # musicbrainz is ranked first and offers an album, so it supplies the group;
-  # spotify's track number is not borrowed
-  assert got["album"] == ("A", "musicbrainz")
-  assert "track_number" not in got
+  # spotify is ranked first and offers an album, so it supplies the whole
+  # group; musicbrainz's album is not mixed in
+  assert got["album"] == ("B", "spotify")
+  assert got["track_number"] == ("3", "spotify")
 
 
 def test_album_group_falls_back_to_an_unranked_source():
@@ -268,12 +273,12 @@ def test_year_field_is_also_earliest_wins():
 def test_unranked_source_is_recorded_as_a_fallback():
   """An unranked source that wins is marked as a fallback.
 
-  iTunes is not ranked for electronic genre but won by falling through; that
-  must be visible rather than silent.
+  Essentia is not ranked for `remixer`, so if it were the only offer it would
+  win by falling through — and that must be visible rather than silent.
   """
-  decisions = arbitrate([cand("genre", "Dance", "itunes")], family="electronic")
-  decision = next(d for d in decisions if d.field == "genre")
-  assert (decision.source, decision.decided_by) == ("itunes", "fallback")
+  decisions = arbitrate([cand("remixer", "Someone", "essentia")], family="electronic")
+  decision = next(d for d in decisions if d.field == "remixer")
+  assert (decision.source, decision.decided_by) == ("essentia", "fallback")
 
 
 def test_a_ranked_source_is_recorded_as_precedence():
@@ -476,7 +481,7 @@ def test_unanimous_agreement_keeps_the_ranked_source():
       family="pop",
     )
   )
-  assert got["album"] == ("Globalization", "musicbrainz")
+  assert got["album"] == ("Globalization", "spotify")
 
 
 @pytest.mark.parametrize(
@@ -544,7 +549,7 @@ def test_precedence_still_decides_when_no_two_sources_agree():
       family="pop",
     )
   )
-  assert got["title"] == ("A", "musicbrainz")
+  assert got["title"] == ("C", "spotify")
 
 
 def test_consensus_ignores_case_and_spacing():
@@ -578,7 +583,7 @@ def test_genre_is_exempt_from_consensus():
       family="electronic",
     )
   )
-  assert got["genre"] == ("Progressive House", "discogs")
+  assert got["genre"] == ("Dance", "itunes")
 
 
 # --- album editions --------------------------------------------------------

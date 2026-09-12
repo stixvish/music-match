@@ -13,7 +13,14 @@ from music.publish import naming, tag
 # resolved-field names that are not ID3 frames. They are kept in the database
 # for provenance and re-tagging but never written to the file.
 NON_TAG_FIELDS = frozenset(
-  {"artwork_url", "catalog_number", "mb_recording_id", "acoustid"}
+  {
+    "artwork_url",
+    "catalog_number",
+    "classifier_genre",
+    "genre_style",
+    "mb_recording_id",
+    "acoustid",
+  }
 )
 
 

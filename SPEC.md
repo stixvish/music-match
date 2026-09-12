@@ -922,6 +922,81 @@ Empty directories are swept after a retag pass. On macOS this needs
 displays, so a folder emptied of music is essentially never empty on disk, and
 a naive `rmdir` prunes nothing at all.
 
+### precedence, rebuilt around what each catalogue is good at
+
+Reset 2026-09-12 after working through a real Bollywood-heavy library.
+
+**Spotify leads every identity field outside electronic** — title, artist,
+album, album artist, track and disc number, ISRC. It is the catalogue a user
+checks a track against, and MusicBrainz, which led these before, has the
+thinnest coverage of exactly the material that needed the most review.
+
+**Beatport leads them inside electronic**, for the same reason in reverse: it
+is the catalogue that music is released into, and often the only source that
+knows a given version exists.
+
+**iTunes takes genre everywhere**, including electronic. Its vocabulary is
+coarse and DJ-shaped, and it is the only source that treats Bollywood as a
+genre rather than smearing it across `Stage & Screen`, `Folk, World, & Country`
+and `Pop`: **46 of 49 world tracks correct against 0 for the classifier.**
+Beatport's and Discogs' finer sub-genres move to `genre_style`, kept beside it
+rather than discarded.
+
+**iTunes takes artwork**, measured at 1200x1200 against Spotify's 640x640,
+still subject to matching the release we tagged.
+
+**Label moves to iTunes and Spotify ahead of Discogs.** Discogs describes the
+pressing it catalogued, which is frequently a reissue or a regional licensee
+rather than the label that released the recording in hand.
+
+Effect on the existing library: Spotify's wins rose from 280 fields to 728 and
+MusicBrainz's fell from 635 to 308.
+
+**Essentia is now scoped to routing only.** It never becomes a genre answer.
+On 49 real Bollywood tracks it returned Laïkó, K-pop, Éntekhno and Flamenco —
+nearest-neighbour guesses from a model with no class for the material — while
+still winning the genre field on 8 tracks. It stays because it is the only
+signal describing *this audio* rather than a catalogue's opinion of it, and it
+genuinely beats iTunes at telling dance from pop, which iTunes flattens.
+
+### regional identification is not classification
+
+The ISRC country override existed because the classifier cannot recognise a
+regional tradition. Two more signals of the same kind now sit beside it:
+
+- **a catalogue's own genre** — `Bollywood`, `Telugu`, `Filmi`, `Qawwali`;
+  this catches a track released under a non-regional ISRC
+- **the label** — T-Series, Tips, Eros appeared on 19 Bollywood tracks and
+  **zero** non-Bollywood ones. Global labels are deliberately excluded
+
+This is load-bearing rather than cosmetic. Seven Bollywood tracks were routed
+to `pop`, so the world override never applied to them — and once Spotify led
+`artist`, those tracks started resolving to the composer instead of the singer.
+Routing them correctly is what keeps the vocalist rule working. Twelve tracks
+move into `world`.
+
+**The classifier's top-level genre is now stored** as a `classifier_genre`
+candidate. Only the style was kept, so the routing *input* was unrecoverable
+and a family could never be recomputed offline the way arbitration can (§11).
+
+### two things that were documented but not implemented
+
+**Credentials in `config.toml` never worked.** `load()` read them from the
+environment alone, so a user following the README and moving keys to
+`~/.config/musicpipeline/config.toml` lost every optional source — each of
+which degrades silently by design. Both paths work now, environment first.
+This matters because `.env` is read from the *working directory*: the same
+command run from another folder quietly loses its credentials.
+
+**The nightly had no tests to run.** It selected `-m live`, nothing carried
+that marker, pytest exited 5, and it had been failing since it was written.
+The marker was also documented as excluded from ordinary runs and nothing
+excluded it, so the first live test written would have broken every local run
+and CI. Both fixed: `addopts = "-m 'not live'"`, and nine live tests covering
+MusicBrainz join phrases, iTunes' Bollywood label, Cover Art Archive, Spotify
+track lookup, Discogs, AcoustID and the essentia model. Credentialed sources
+skip rather than fail, so the nightly is useful with no secrets configured.
+
 ### genre: top level, except when the top level is not a genre
 
 Discogs styles are too fine to browse: 120 tracks produced **107 distinct

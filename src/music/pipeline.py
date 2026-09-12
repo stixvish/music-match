@@ -269,8 +269,17 @@ def resolve_and_arbitrate(
   # not in the family map and silently routed everything to `other`.
   by_field = {c.field: c.value for c in candidates}
   prediction = _classified_genre(item.path)
+  # the catalogue's own genre and the label both name regional traditions the
+  # classifier has no class for; the classifier still decides everything else
+  catalogue_genre = next(
+    (c.value for c in candidates if c.field == "genre" and c.source == "itunes"),
+    next((c.value for c in candidates if c.field == "genre"), ""),
+  )
   family = family_for_identity(
-    prediction.genre if prediction else "", by_field.get("isrc")
+    prediction.genre if prediction else "",
+    by_field.get("isrc"),
+    catalogue_genre=catalogue_genre,
+    label=by_field.get("label", ""),
   )
   # essentia is the last-resort genre source (SPEC.md §7): it ranks below
   # every real source, but it describes *this audio* rather than whichever
@@ -280,6 +289,19 @@ def resolve_and_arbitrate(
       FieldCandidate(
         field="genre",
         value=prediction.style,
+        source="essentia",
+        confidence=float(prediction.activation),
+      )
+    )
+  if prediction and prediction.genre:
+    # The classifier's *top-level* genre is what routes. Only the style was
+    # stored, so the routing input was unrecoverable and a family could never
+    # be recomputed offline the way arbitration can (SPEC.md §11). It is not an
+    # ID3 frame; `fields.NON_TAG_FIELDS` keeps it out of the file.
+    candidates.append(
+      FieldCandidate(
+        field="classifier_genre",
+        value=prediction.genre,
         source="essentia",
         confidence=float(prediction.activation),
       )

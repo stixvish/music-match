@@ -90,6 +90,46 @@ def family_for(genre: str) -> str:
 # classify, because it has no class for it. cp5 measured bollywood scattering
 # across pop/world/electronic with predicted styles of "K-pop", "Laïkó" and
 # "Pachanga" — nearest-neighbour guesses, not categories.
+# Catalogue genres that name a regional tradition directly. iTunes tagged 46
+# of 49 Bollywood tracks correctly where the classifier got 0 (SPEC.md §7), and
+# an ISRC only catches recordings registered in the region — a Bollywood track
+# released under a UK ISRC needs this instead.
+REGIONAL_GENRES = frozenset(
+  {
+    "bollywood",
+    "indian pop",
+    "telugu",
+    "tamil",
+    "punjabi",
+    "bhangra",
+    "filmi",
+    "desi pop",
+    "hindustani",
+    "carnatic",
+    "qawwali",
+    "ghazal",
+  }
+)
+
+# Indian film labels. Measured on the real library: T-Series, Tips, Eros
+# International and Eros Music appeared on 19 Bollywood tracks and **zero**
+# non-Bollywood ones. Global labels like Sony Music are deliberately absent —
+# they carry everything.
+REGIONAL_LABELS = frozenset(
+  {
+    "t-series",
+    "tips",
+    "tips industries",
+    "eros international",
+    "eros music",
+    "zee music company",
+    "saregama",
+    "venus records",
+    "yrf music",
+    "t series",
+  }
+)
+
 REGIONAL_ISRC_PREFIXES = {
   "IN": "world",  # india
   "LK": "world",  # sri lanka
@@ -98,7 +138,12 @@ REGIONAL_ISRC_PREFIXES = {
 }
 
 
-def family_for_identity(genre: str, isrc: str | None = None) -> str:
+def family_for_identity(
+  genre: str,
+  isrc: str | None = None,
+  catalogue_genre: str = "",
+  label: str = "",
+) -> str:
   """Choose a precedence family, letting ISRC country override the classifier.
 
   The classifier is the default, but it has no class for several regional
@@ -112,6 +157,9 @@ def family_for_identity(genre: str, isrc: str | None = None) -> str:
   Args:
     genre: Top-level genre from the classifier.
     isrc: The recording's ISRC, once known.
+    catalogue_genre: A catalogue's own genre, which names regional traditions
+      the classifier has no class for.
+    label: The release label; the Indian film labels are unambiguous.
 
   Returns:
     One of `FAMILIES`.
@@ -120,7 +168,15 @@ def family_for_identity(genre: str, isrc: str | None = None) -> str:
     override = REGIONAL_ISRC_PREFIXES.get(isrc[:2].upper())
     if override:
       return override
+  if catalogue_genre.strip().casefold() in REGIONAL_GENRES:
+    return "world"
+  if _normalise_label(label) in REGIONAL_LABELS:
+    return "world"
   return family_for(genre)
+
+
+def _normalise_label(label: str) -> str:
+  return " ".join((label or "").casefold().replace(".", " ").split())
 
 
 def model_paths() -> dict[str, Path]:
