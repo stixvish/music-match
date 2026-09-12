@@ -952,6 +952,31 @@ The division of labour that results:
 Spotify decides *who the act is*; MusicBrainz decides *who is a guest*. Each
 source answers the question it is actually good at.
 
+### the ui shows what will be written
+
+House style is applied at publish time, so `resolved_field` keeps the literal
+string a catalogue supplied — `feat.`, a curly apostrophe — while the file gets
+`ft.` and an ASCII one. The review ui showed the database, which made it look
+as though the style had never been applied. Verified on disk: every published
+tag reads `ft.`, so only the display was wrong. Resolved rows now carry a
+`display` value in house style, and that is what the ui shows and edits.
+
+### repairing what a source mangled
+
+Spotify title-cases hard enough to produce `I’Ll Be Waiting` and
+`Corners Of My Mind`. `I'Ll` is never correct English, so it is repaired on the
+way out rather than fought over in precedence — no source ranking makes a
+mangled string right.
+
+The contraction suffixes are listed explicitly (`ll`, `re`, `ve`, `s`, `t`,
+`d`, `m`, `n`) because a blanket "lowercase after an apostrophe" rule destroys
+names: `O'Brien`, `D'Angelo`, `O'Neal`, `L'Amour`. That regression appeared in
+the first version and was caught by running the examples.
+
+`Corners Of My Mind` is **not** repaired. Lower-casing function words inside a
+title is a defensible convention but it would also rewrite `Of Monsters and
+Men` and `The Man Who Sold The World`, so it is left alone pending a decision.
+
 ### saved is not written
 
 The ui had one notion of success and the system has two: a change is *recorded*

@@ -67,6 +67,31 @@ def asciify_quotes(raw: str) -> str:
   return (raw or "").translate(_TYPOGRAPHIC)
 
 
+# An uppercase letter straight after an apostrophe, but only where it forms a
+# real contraction: `I'Ll`, `Don'T`, `It'S`. Spotify title-cases aggressively
+# enough to produce these and they are never correct English, so they are
+# repaired on the way out rather than fought over in precedence.
+#
+# The suffix list is explicit because a blanket rule destroys names:
+# `O'Brien` is not a contraction and must survive untouched.
+_CONTRACTION = re.compile(
+  r"(['\u2019])(LL|RE|VE|S|T|D|M|N)\b",
+  re.IGNORECASE,
+)
+
+
+def fix_contractions(raw: str) -> str:
+  """Lower-case a letter that title-casing wrongly capitalised after an apostrophe.
+
+  Args:
+    raw: Any text.
+
+  Returns:
+    The text with `I'Ll` repaired to `I'll`.
+  """
+  return _CONTRACTION.sub(lambda m: m.group(1) + m.group(2).lower(), raw or "")
+
+
 def canonical_title(raw: str) -> str:
   """Rewrite a title into house style.
 
@@ -76,7 +101,7 @@ def canonical_title(raw: str) -> str:
   Returns:
     The title with `ft.` parenthesised and any mix name bracketed.
   """
-  text = _SPACES.sub(" ", asciify_quotes(raw).strip())
+  text = _SPACES.sub(" ", fix_contractions(asciify_quotes(raw)).strip())
   if not text:
     return ""
 

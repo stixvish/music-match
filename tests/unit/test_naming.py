@@ -186,3 +186,31 @@ def test_typographic_quotes_are_asciified():
   assert naming.canonical_title("Club Can’t Handle Me") == "Club Can't Handle Me"
   assert naming.safe_component("Flo’s Track") == "Flo's Track"
   assert naming.asciify_quotes("“quoted” – dash") == '"quoted" - dash'
+
+
+# --- capitalisation a source mangled ---------------------------------------
+
+
+@pytest.mark.parametrize(
+  ("given", "want"),
+  [
+    ("I’Ll Be Waiting", "I'll Be Waiting"),
+    ("Don'T Stop", "Don't Stop"),
+    ("It'S Time", "It's Time"),
+    ("We'Re Here", "We're Here"),
+    ("I'Ve Got You", "I've Got You"),
+  ],
+)
+def test_a_title_cased_contraction_is_repaired(given, want):
+  """Spotify title-cases hard enough to produce `I'Ll`, which is never English.
+
+  Repaired on the way out rather than fought over in precedence, since no
+  source ranking makes a mangled string correct.
+  """
+  assert naming.canonical_title(given) == want
+
+
+@pytest.mark.parametrize("name", ["O'Brien's Song", "D'Angelo", "O'Neal", "L'Amour"])
+def test_a_name_is_not_a_contraction(name):
+  """The suffix list is explicit because a blanket rule destroys these."""
+  assert naming.canonical_title(name) == name

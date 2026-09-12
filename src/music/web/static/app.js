@@ -309,7 +309,7 @@ function renderTrack() {
         : opts.length ? `${opts.length} sources — pick one` : 'no source offered this';
       return `<div class="field" data-field="${f}" data-focused="${state.field === f}">
         <span class="label">${f.replace(/_/g, ' ')}</span>
-        <input value="${esc(r?.value ?? '')}" data-empty="${!r?.value}"
+        <input value="${esc(r?.display ?? r?.value ?? '')}" data-empty="${!r?.value}"
                placeholder="${esc(p?.value ?? opts[0]?.value ?? '')}" data-field="${f}">
         <span class="src ${by}">${esc(r?.source ?? hint)}${by ? ` · ${by}` : ''}</span>
       </div>`;

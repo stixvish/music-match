@@ -12,6 +12,7 @@ from pydantic import BaseModel
 from music import config, db, elicit, pipeline
 from music.arbitrate import Decision, arbitrate, persist
 from music.publish import (
+  naming,
   publish_track,
   refreshed_artwork,
   reset_refreshed,
@@ -66,6 +67,25 @@ class Choice(BaseModel):
   """One elicitation answer: the index of the option picked, or -1."""
 
   option: int
+
+
+def _house_style(field: str, value: str) -> str:
+  """Render a value the way it will appear in the file.
+
+  Args:
+    field: Field name.
+    value: The stored value, as the source supplied it.
+
+  Returns:
+    The value in house style, or unchanged for fields that carry none.
+  """
+  if not value:
+    return value
+  if field == "title":
+    return naming.canonical_title(value)
+  if field in ("artist", "album", "album_artist"):
+    return naming.asciify_quotes(value)
+  return value
 
 
 def _rows(conn: sqlite3.Connection, sql: str, *args: Any) -> list[dict]:
@@ -212,14 +232,22 @@ def create_app(database: Path | None = None) -> FastAPI:
         family=head["genre_family"] or "other",
       )
     ]
+    # Show what will be *written*, not what a source said. House style is
+    # applied at publish time, so the database keeps `feat.` and the curly
+    # apostrophe a catalogue supplied while the file gets `ft.` and an ASCII
+    # one — and the ui, showing the database, looked like the style was never
+    # applied at all (SPEC.md §14).
+    resolved = _rows(
+      conn,
+      "SELECT field, value, source, decided_by FROM resolved_field"
+      " WHERE track_id=? ORDER BY field",
+      track_id,
+    )
+    for row in resolved:
+      row["display"] = _house_style(row["field"], row["value"])
     return {
       "track": dict(head),
-      "resolved": _rows(
-        conn,
-        "SELECT field, value, source, decided_by FROM resolved_field"
-        " WHERE track_id=? ORDER BY field",
-        track_id,
-      ),
+      "resolved": resolved,
       "candidates": candidates,
       "preview": preview,
     }
