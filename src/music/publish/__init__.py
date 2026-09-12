@@ -32,39 +32,42 @@ __all__ = [
   "fields",
   "layout_path",
   "naming",
+  "prune_empty",
   "publish_track",
   "refreshed_artwork",
   "reset_refreshed",
   "retag",
+  "sweep_empty",
   "tag",
   "transcode",
 ]
 
-# six families (SPEC.md §7). unknown genres land in `other`.
-FAMILIES = ("electronic", "hip-hop", "pop", "r&b-soul", "world", "other")
 
-
-def layout_path(library: Path, family: str, artist: str, title: str) -> Path:
+def layout_path(library: Path, artist: str, title: str) -> Path:
   """Build the output path.
 
-  `library/<genre-family>/<artist>/<Artist> - <Title>.aiff`
+  `library/<Artist> - <Title>.aiff` — one flat directory.
+
+  Nesting was tried two ways and both lost to real data (SPEC.md §14). By
+  *genre family*, the folder was a second job for a value that exists to select
+  a precedence table, and correcting a genre meant moving the file. By
+  *artist*, collaborations shatter a performer's catalogue: Arijit Singh
+  occupies ten folders in a 120-track library, including both
+  `Antara Mitra & Arijit Singh` and `Arijit Singh & Antara Mitra`.
+
+  Flat also means the path depends on the two fields least likely to be wrong,
+  so the resolver can keep improving without moving files around underneath
+  rekordbox and serato, which track by path.
 
   Args:
     library: Library root.
-    family: Genre family; anything unrecognised becomes `other`.
     artist: Artist name.
     title: Track title.
 
   Returns:
     Full destination path.
   """
-  safe_family = family if family in FAMILIES else "other"
-  return (
-    library
-    / safe_family
-    / naming.safe_component(artist)
-    / naming.filename(artist, title)
-  )
+  return library / naming.filename(artist, title)
 
 
 def fetch_artwork(url: str, timeout: int = 20) -> bytes | None:
@@ -105,7 +108,9 @@ def resolved_tags(conn: sqlite3.Connection, track_id: int) -> tag.Tags:
   return fields.build_for(conn, track_id).tags
 
 
-def retag(conn: sqlite3.Connection, track_id: int) -> Path | None:
+def retag(
+  conn: sqlite3.Connection, track_id: int, library: Path | None = None
+) -> Path | None:
   """Rewrite an already-published file's tags from the database.
 
   This is the payoff for treating the database as the source of truth: a better
@@ -118,10 +123,15 @@ def retag(conn: sqlite3.Connection, track_id: int) -> Path | None:
   Args:
     conn: Open connection.
     track_id: Track to re-tag.
+    library: Library root; read from config when omitted.
 
   Returns:
     The file's path, or None if the track has not been published.
   """
+  if library is None:
+    from music import config
+
+    library = config.load().paths.library
   row = conn.execute(
     "SELECT published_path, genre_family, artwork_url FROM track WHERE id = ?",
     (track_id,),
@@ -155,7 +165,7 @@ def retag(conn: sqlite3.Connection, track_id: int) -> Path | None:
     built.tags.artwork = existing.artwork
   tag.write(path, built.tags)
 
-  renamed = _rename_if_needed(conn, track_id, path, row["genre_family"], built.tags)
+  renamed = _rename_if_needed(conn, track_id, path, library, built.tags)
   return renamed or path
 
 
@@ -163,24 +173,106 @@ def _rename_if_needed(
   conn: sqlite3.Connection,
   track_id: int,
   path: Path,
-  family: str | None,
+  library: Path,
   tags: tag.Tags,
 ) -> Path | None:
-  """Move a published file if canonical naming now yields a different path."""
+  """Move a published file if canonical naming now yields a different path.
+
+  The library root is passed in rather than derived from the file's own path:
+  a file still sitting in the old `<family>/<artist>/` tree is at a different
+  depth from one already flat, so deriving it climbs the wrong number of
+  levels. This is also what migrates the old layout — a retag relocates every
+  file and sweeps up the directories it empties.
+  """
   artist = tags.values.get("artist")
   title = tags.values.get("title")
   if not artist or not title:
     return None
-  target = layout_path(path.parents[2], family or "other", artist, title)
+  target = layout_path(library, artist, title)
   if target == path or target.exists():
     return None
   target.parent.mkdir(parents=True, exist_ok=True)
   path.replace(target)
+  prune_empty(path.parent, library)
   conn.execute(
     "UPDATE track SET published_path = ?, updated_at = datetime('now') WHERE id = ?",
     (str(target), track_id),
   )
   return target
+
+
+# Finder writes `.DS_Store` into every directory it displays, so a folder
+# emptied of music is almost never empty on disk. Treating these as absent is
+# what makes pruning work at all on macOS; they hold Finder view settings and
+# nothing else.
+IGNORABLE = frozenset({".DS_Store", ".localized"})
+
+
+def _is_vacant(directory: Path) -> bool:
+  """Whether a directory holds nothing but macOS metadata.
+
+  Args:
+    directory: Directory to inspect.
+
+  Returns:
+    True when it can be removed.
+  """
+  try:
+    return all(entry.name in IGNORABLE for entry in directory.iterdir())
+  except OSError:
+    return False
+
+
+def prune_empty(directory: Path, library: Path) -> int:
+  """Remove directories left empty by a move, up to but never including root.
+
+  Args:
+    directory: The directory the file came from.
+    library: Library root, which is never removed.
+
+  Returns:
+    How many directories were removed.
+  """
+  current = directory.resolve()
+  root = library.resolve()
+  removed = 0
+  while current != root and root in current.parents and _is_vacant(current):
+    parent = current.parent
+    try:
+      for entry in current.iterdir():
+        entry.unlink()
+      current.rmdir()
+    except OSError:
+      return removed
+    removed += 1
+    current = parent
+  return removed
+
+
+def sweep_empty(library: Path) -> int:
+  """Remove every vacant directory under the library.
+
+  A per-move prune only reaches the directory a file just left. Migrating a
+  whole library leaves siblings behind, so a pass is swept at the end.
+
+  Args:
+    library: Library root, which is never removed.
+
+  Returns:
+    How many directories were removed.
+  """
+  if not library.is_dir():
+    return 0
+  removed = 0
+  # deepest first, so a parent is considered only once its children are gone
+  for directory in sorted(
+    (p for p in library.rglob("*") if p.is_dir()),
+    key=lambda p: len(p.parts),
+    reverse=True,
+  ):
+    if directory.exists():
+      removed += prune_empty(directory, library)
+  return removed
 
 
 def publish_track(
@@ -217,7 +309,7 @@ def publish_track(
   artist = tags.values.get("artist", "unknown artist")
   title = tags.values.get("title", source.stem)
 
-  dest = layout_path(library, row["genre_family"] or "other", artist, title)
+  dest = layout_path(library, artist, title)
   # collisions are flagged rather than silently overwritten (SPEC.md §14).
   if dest.exists():
     dest = dest.with_name(f"{dest.stem} (2){dest.suffix}")

@@ -17,7 +17,7 @@ def published(tmp_path, synth_audio):
   conn = db.connect(tmp_path / "r.db")
   db.migrate(conn)
   library = tmp_path / "library"
-  dest = layout_path(library, "pop", "Pitbull", "Time of Our Lives")
+  dest = layout_path(library, "Pitbull", "Time of Our Lives")
   transcode.to_aiff(synth_audio, dest)
 
   conn.execute(

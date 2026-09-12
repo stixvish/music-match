@@ -891,6 +891,59 @@ collaboration — MusicBrainz joins the two with `&`, not `feat.`, and it is
 right. The catalogue's own distinction is the authority; inferring one from
 adjacent fields is not.
 
+### the library is flat
+
+Nesting was tried two ways and both lost to the data.
+
+**By genre family** it asked one value to do two jobs. `genre_family` exists to
+select a precedence table, is computed once before any metadata is contested,
+and is never updated — so it was simultaneously the most *stable* key available
+and the one with the weakest claim to being right. Correcting a genre could not
+move the file, and making it move files would relocate tracks under rekordbox
+and serato, which track by path and lose cue points when a path changes.
+
+**By artist** collaborations shatter a performer's catalogue. Measured on 120
+tracks: Arijit Singh appears in **ten** distinct credits, including both
+`Antara Mitra & Arijit Singh` and `Arijit Singh & Antara Mitra` — two
+directories for one pairing.
+
+**By album** the tree is barely a tree: 120 tracks produced **105 distinct
+albums, 94 of them holding a single track**. That is the shape of a DJ library,
+where tracks are collected individually, not a record collection.
+
+So: `library/<Artist> - <Title>.aiff`, one directory. The path depends only on
+the two fields least likely to be wrong, organisation happens inside the DJ
+software where the user actually works, and the resolver can keep improving
+without moving files underneath it. Migrating the existing library moved 120
+files and removed 32 directories.
+
+Empty directories are swept after a retag pass. On macOS this needs
+`.DS_Store` treated as absence — Finder writes one into every directory it
+displays, so a folder emptied of music is essentially never empty on disk, and
+a naive `rmdir` prunes nothing at all.
+
+### genre: top level, except when the top level is not a genre
+
+Discogs styles are too fine to browse: 120 tracks produced **107 distinct
+styles**. Top-level genres gave 8 buckets with usable sizes, so `genre` takes
+the top level and the style is kept beside it as `genre_style`.
+
+But Discogs mixes two kinds of category at the top level. Most name a *sound*
+(`Electronic`, `Hip Hop`, `Funk / Soul`); a few name an *origin*. **"Stage &
+Screen" means the music came from a film, a musical or a TV show** — it covered
+17 Bollywood tracks and 7 orchestral soundtracks in the same bucket, which is
+not a distinction any set is built on. `Folk, World, & Country` behaves the
+same way.
+
+For those, the style is the real genre, so `PROVENANCE_GENRES` yields to it:
+`Stage & Screen`/`Bollywood` resolves to `Bollywood`, `Stage & Screen`/
+`Soundtrack` to `Soundtrack`.
+
+**Known residue:** 15 Bollywood tracks are filed by Discogs under the top-level
+`Pop` with the style `Bollywood`, and this rule leaves them as `Pop` — the
+three-way split of Bollywood across `Stage & Screen`, `Folk, World, & Country`
+and `Pop` is narrowed, not closed.
+
 ### the server must not hold stale code
 
 `music serve` ran a single in-process app, so a server started before a code

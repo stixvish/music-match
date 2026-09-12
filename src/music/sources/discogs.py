@@ -22,6 +22,13 @@ from music.sources.ratelimit import RateLimiter, with_backoff
 log = logging.getLogger(__name__)
 
 API = "https://api.discogs.com/database/search"
+# Discogs top-level genres that name an origin, not a sound. Measured on the
+# real library: 17 Bollywood tracks were filed under "Stage & Screen" and 11
+# under "Folk, World, & Country", alongside orchestral soundtracks.
+PROVENANCE_GENRES = frozenset(
+  {"stage & screen", "folk, world, & country", "non-music", "children's"}
+)
+
 NAME = "discogs"
 
 
@@ -52,10 +59,22 @@ def candidates_from(result: dict) -> list[FieldCandidate]:
   out: list[FieldCandidate] = []
   styles = [s for s in (result.get("style") or []) if s]
   genres = [g for g in (result.get("genre") or []) if g]
+  # Top-level genre, not style: 120 tracks produced 107 distinct styles
+  # (`Alt-Pop`, `Cloud Rap`, `Hindustani`) against 8 top-level genres with
+  # usable bucket sizes (SPEC.md §7). The style is kept alongside, as
+  # `genre_style`, for anyone who wants the detail.
+  #
+  # Except where the top level describes *provenance* rather than sound. Those
+  # categories say where the music came from, not what it is: "Stage & Screen"
+  # covers an orchestral score and a Bollywood dance number alike, and is not
+  # a genre anybody cues a set from. There the style is the real answer.
+  top = genres[0] if genres else ""
+  chosen = styles[0] if (top.casefold() in PROVENANCE_GENRES and styles) else top
+  value = chosen or (styles[0] if styles else "")
+  if value:
+    out.append(FieldCandidate(field="genre", value=value, source=NAME))
   if styles:
-    out.append(FieldCandidate(field="genre", value=styles[0], source=NAME))
-  elif genres:
-    out.append(FieldCandidate(field="genre", value=genres[0], source=NAME))
+    out.append(FieldCandidate(field="genre_style", value=styles[0], source=NAME))
 
   labels = [x for x in (result.get("label") or []) if x]
   if labels:

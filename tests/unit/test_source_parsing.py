@@ -38,9 +38,24 @@ def test_discogs_prefers_the_earliest_pressing():
   assert chosen["year"] == "2000"
 
 
-def test_discogs_prefers_style_over_genre():
-  """Discogs genre is too coarse for a DJ; style is the useful taxonomy."""
-  got = {c.field: c.value for c in discogs.candidates_from(DISCOGS["results"][0])}
+def test_discogs_prefers_the_top_level_genre():
+  """Reversed deliberately: this asserted style over genre.
+
+  Styles are too fine to browse or build a set from — 120 real tracks produced
+  107 distinct styles (`Alt-Pop`, `Cloud Rap`, `Hindustani`) against 8
+  top-level genres with usable bucket sizes. The style is still emitted, as
+  `genre_style`, for anyone who wants the detail.
+  """
+  got = {
+    c.field: c.value
+    for c in discogs.candidates_from({"style": ["House"], "genre": ["Electronic"]})
+  }
+  assert got["genre"] == "Electronic"
+  assert got["genre_style"] == "House"
+
+
+def test_discogs_falls_back_to_style_when_no_genre_is_given():
+  got = {c.field: c.value for c in discogs.candidates_from({"style": ["House"]})}
   assert got["genre"] == "House"
 
 
@@ -140,3 +155,46 @@ def test_spotify_takes_only_the_primary_artist():
 
 def test_spotify_missing_fields():
   assert spotify.candidates_from({}) == []
+
+
+def test_a_provenance_genre_yields_to_the_style():
+  """Stage & Screen says where the music came from, not what it is.
+
+  It covered 17 Bollywood tracks and 7 orchestral soundtracks in the real
+  library — one label for two things nobody would cue together.
+  """
+  got = {
+    c.field: c.value
+    for c in discogs.candidates_from(
+      {"genre": ["Stage & Screen"], "style": ["Bollywood"]}
+    )
+  }
+  assert got["genre"] == "Bollywood"
+  assert got["genre_style"] == "Bollywood"
+
+
+def test_folk_world_country_also_yields():
+  got = {
+    c.field: c.value
+    for c in discogs.candidates_from(
+      {"genre": ["Folk, World, & Country"], "style": ["Hindustani"]}
+    )
+  }
+  assert got["genre"] == "Hindustani"
+
+
+def test_a_sound_genre_keeps_its_top_level():
+  got = {
+    c.field: c.value
+    for c in discogs.candidates_from({"genre": ["Electronic"], "style": ["Deep House"]})
+  }
+  assert got["genre"] == "Electronic"
+  assert got["genre_style"] == "Deep House"
+
+
+def test_a_provenance_genre_with_no_style_is_kept():
+  """Better a vague label than none at all."""
+  got = {
+    c.field: c.value for c in discogs.candidates_from({"genre": ["Stage & Screen"]})
+  }
+  assert got["genre"] == "Stage & Screen"
