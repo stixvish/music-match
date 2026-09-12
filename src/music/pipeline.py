@@ -19,11 +19,14 @@ from typing import TYPE_CHECKING
 from music import config, db
 from music.acquire import (
   Download,
+  QualityError,
+  VideoRef,
   already_have,
   classify_download,
   download,
   enumerate_playlist,
   flag_video_rip,
+  refresh_cookies,
   register,
 )
 from music.arbitrate import arbitrate, persist
@@ -432,6 +435,10 @@ def ingest(
   # together, and de-duplicating across them, means a track appearing on two
   # playlists is downloaded once rather than downloaded and then skipped.
   urls = [u for u in re.split(r"[\s,]+", url) if u]
+  # Fresh cookies for every run. YouTube rotates session cookies, so a jar
+  # kept for the life of the process goes stale — and the web ui's server is a
+  # process that stays up for days.
+  refresh_cookies()
   step("enumerate", f"$ music ingest {' '.join(urls)}")
   try:
     refs = []
@@ -472,7 +479,7 @@ def ingest(
         state.skipped += 1
         continue
       step("download", f"[{index}/{len(refs)}] {ref.title[:60]}")
-      item = download(ref.video_id, cfg.paths.staging, cfg.youtube, sink)
+      item = _download_with_fresh_cookies(ref, cfg, sink, buffer)
       track_id = register(conn, item)
       state.downloaded += 1
       changed()
@@ -543,3 +550,40 @@ def _set_stage(conn: sqlite3.Connection, track_id: int, stage: str) -> None:
     "UPDATE track SET stage = ?, updated_at = datetime('now') WHERE id = ?",
     (stage, track_id),
   )
+
+
+def _download_with_fresh_cookies(
+  ref: VideoRef, cfg: config.Config, sink: object, buffer: LogBuffer
+) -> Download:
+  """Download one track, re-reading cookies once if the stream is downgraded.
+
+  A run over the full library takes hours, so cookies can rotate part way
+  through. The symptom is specific and already named in `download`: the best
+  available stream drops below the bitrate floor, because YouTube is serving
+  the unauthenticated formats. Retrying *that* signal is better than guessing
+  a refresh interval — it responds to the thing that actually went wrong.
+
+  One retry only. If fresh cookies do not restore the premium formats, the
+  problem is the account or the browser session, and quietly re-reading the
+  keychain on a loop would hide it.
+
+  Args:
+    ref: The video to fetch.
+    cfg: Runtime configuration.
+    sink: yt-dlp logger, so the retry is visible in the console.
+    buffer: Run log.
+
+  Returns:
+    The download.
+
+  Raises:
+    QualityError: If the floor is still not met after a refresh.
+  """
+  try:
+    return download(ref.video_id, cfg.paths.staging, cfg.youtube, sink)
+  except QualityError as exc:
+    buffer.add(f"  {exc}", "warn")
+    buffer.add("  re-reading cookies and retrying — they may have rotated", "step")
+    log.warning("quality floor missed; refreshing cookies and retrying once")
+    refresh_cookies()
+    return download(ref.video_id, cfg.paths.staging, cfg.youtube, sink)

@@ -58,17 +58,35 @@ class Download:
 _COOKIE_JAR: Path | None = None
 
 
+def refresh_cookies() -> None:
+  """Discard the extracted jar so the next call reads the browser again.
+
+  Called at the start of every run. YouTube rotates session cookies, so a jar
+  extracted once and kept for the life of the process goes stale — and
+  `music serve` is a process that stays up for days. The previous version
+  cached per *process* while its own docstring claimed per *run*.
+  """
+  global _COOKIE_JAR
+  if _COOKIE_JAR is not None:
+    _COOKIE_JAR.unlink(missing_ok=True)
+  _COOKIE_JAR = None
+
+
 def _cookie_jar(cfg: YouTubeConfig) -> Path | None:
-  """Extract the browser's cookies once, into a file reused for the run.
+  """Extract the browser's cookies once per run, into a private file.
 
   `--cookies-from-browser` re-reads the browser's cookie store on *every*
   yt-dlp call. On macOS that means unlocking the keychain and decrypting the
   whole store once per track, which is slow, prompts the user, and reads far
   more of their browsing data than the job needs.
 
-  The extracted jar lives in a private temp file for the life of the process
-  and is deleted at exit. It is never written into the repository or the
-  config directory — it is an authenticated credential (SPEC.md §13).
+  Once per *run* is the right unit: cheap enough to be invisible (0.15 s
+  measured), and fresh enough that rotation between runs is picked up.
+  `refresh_cookies` is what makes a run a run.
+
+  The jar lives in a private temp file, mode 600, deleted at exit. It is never
+  written into the repository or the config directory — it is an authenticated
+  credential (SPEC.md §13).
 
   Args:
     cfg: YouTube settings, for which browser to read.

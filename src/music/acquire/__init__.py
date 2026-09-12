@@ -17,6 +17,7 @@ from music.acquire.youtube import (
   VideoRef,
   download,
   enumerate_playlist,
+  refresh_cookies,
 )
 
 __all__ = [
@@ -33,6 +34,7 @@ __all__ = [
   "enumerate_playlist",
   "flag_video_rip",
   "register",
+  "refresh_cookies",
   "register_local",
 ]
 

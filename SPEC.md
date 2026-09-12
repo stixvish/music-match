@@ -1216,10 +1216,27 @@ is still the user's call.
 `--cookies-from-browser chrome` was passed on every yt-dlp call, so the browser
 cookie store was re-read — and on macOS the keychain unlocked — once per track.
 Over 2,329 tracks that is 2,329 decryptions of the user's entire cookie store
-for one authenticated session. They are now extracted once into a private temp
-file (mode 600, deleted at exit) and reused. Extraction fell back to per-call
-on failure rather than losing authentication. Measured: 110 cookies, 0.15 s
-once, then free.
+for one authenticated session. Measured: 110 cookies, 0.15 s.
+
+**Per run, not per process.** The first fix cached the jar in a module global
+for the life of the process while its own docstring claimed the life of the
+run — and `music serve` stays up for days, so a server started on Monday would
+still be presenting Monday's cookies on Thursday. YouTube rotates session
+cookies. `refresh_cookies()` is called at the start of every ingest, which is
+the correct unit: cheap enough to be invisible, fresh enough to pick up
+rotation between runs.
+
+**Mid-run rotation is recovered from its own symptom.** A full-library run
+takes hours, so cookies can rotate part way through. The signal is specific and
+already named: the best available stream drops below the bitrate floor, because
+YouTube is serving the unauthenticated formats. That triggers one refresh and
+one retry — responding to what actually went wrong rather than guessing a
+refresh interval. Exactly one retry: if fresh cookies do not restore the
+premium formats the problem is the account or the browser session, and quietly
+re-reading the keychain on a loop would hide it.
+
+Extraction failure still falls back to per-call rather than losing
+authentication.
 
 ### result selection — one scorer, three call sites
 
