@@ -96,3 +96,69 @@ def test_retag_on_a_missing_file_is_a_noop(published):
   conn, dest, _ = published
   dest.unlink()
   assert retag(conn, 1) is None
+
+
+def test_retag_replaces_a_changed_cover(tmp_path, synth_audio):
+  """A cover corrected in the review ui has to reach the file.
+
+  Retag used to keep whatever artwork the file already held, unconditionally.
+  The database recorded the new choice, the ui reported it saved, and the
+  picture in rekordbox never changed — which looks exactly like the edit not
+  having been submitted.
+  """
+  import hashlib
+
+  from music import db, publish
+  from music.publish import tag
+
+  conn = db.connect(tmp_path / "r.db")
+  db.migrate(conn)
+  conn.execute(
+    "INSERT INTO source_file (id, origin, staging_path, sha256, duration_s)"
+    " VALUES (1,'youtube',?, 'h', 2.0)",
+    (str(synth_audio),),
+  )
+  conn.execute(
+    "INSERT INTO track (id, source_file_id, genre_family) VALUES (1,1,'pop')"
+  )
+  for field, value in (("artist", "An Artist"), ("title", "A Song")):
+    conn.execute(
+      "INSERT INTO resolved_field (track_id, field, value, source, decided_by)"
+      " VALUES (1,?,?, 'musicbrainz','precedence')",
+      (field, value),
+    )
+
+  red = b"\xff\xd8\xff" + b"R" * 500
+  blue = b"\xff\xd8\xff" + b"B" * 500
+  fetched: list[str] = []
+
+  def fake_fetch(url, timeout=20):  # noqa: ARG001
+    fetched.append(url)
+    return red if url.endswith("red.jpg") else blue
+
+  original = publish.fetch_artwork
+  publish.fetch_artwork = fake_fetch
+  try:
+    conn.execute(
+      "INSERT INTO resolved_field (track_id, field, value, source, decided_by)"
+      " VALUES (1,'artwork_url','https://x/red.jpg','itunes','precedence')"
+    )
+    path = publish.publish_track(conn, 1, tmp_path / "lib", tmp_path / "stage")
+    assert tag.read(path).artwork == red
+
+    # the reviewer picks a different cover
+    conn.execute(
+      "INSERT OR REPLACE INTO resolved_field (track_id, field, value, source,"
+      " decided_by) VALUES (1,'artwork_url','https://x/blue.jpg','spotify','manual')"
+    )
+    out = publish.retag(conn, 1)
+    assert tag.read(out).artwork == blue, "the new cover must reach the file"
+
+    # and an unchanged cover is not re-downloaded on every retag
+    before = len(fetched)
+    publish.retag(conn, 1)
+    assert len(fetched) == before
+    assert hashlib.md5(tag.read(out).artwork).hexdigest()
+  finally:
+    publish.fetch_artwork = original
+  conn.close()

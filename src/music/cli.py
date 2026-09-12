@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 
 from music import config, db, pipeline
 from music.arbitrate import rearbitrate
-from music.publish import retag
+from music.publish import refreshed_artwork, reset_refreshed, retag
 
 if TYPE_CHECKING:  # the classify group is optional and heavy
   from music.classify import Classifier
@@ -66,15 +66,30 @@ def cmd_retag(args: argparse.Namespace) -> int:
     changed = sum(rearbitrate(conn, track_id) for track_id in ids)
     log.info("re-arbitrated %d track(s), %d field(s) changed", len(ids), changed)
 
-  done = missing = 0
+  reset_refreshed()
+  done = missing = renamed = 0
   for track_id in ids:
+    before = conn.execute(
+      "SELECT published_path FROM track WHERE id = ?", (track_id,)
+    ).fetchone()["published_path"]
     path = retag(conn, track_id)
     if path is None:
       missing += 1
       continue
     done += 1
+    if str(path) != before:
+      renamed += 1
+      log.info("renamed: %s", path.name)
     log.debug("retagged %s", path.name)
-  log.info("retagged %d file(s), %d missing", done, missing)
+
+  covers = len(refreshed_artwork())
+  log.info(
+    "retagged %d file(s): %d cover(s) replaced, %d renamed, %d missing",
+    done,
+    covers,
+    renamed,
+    missing,
+  )
   # rekordbox caches tags per path and will not notice (SPEC.md §10)
   if done:
     log.warning("rekordbox caches tags per path — use Reload Tag to see changes")

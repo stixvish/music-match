@@ -40,6 +40,9 @@ CREATE TABLE IF NOT EXISTS track (
   isrc                TEXT,
   mb_recording_id     TEXT,
   published_path      TEXT,
+  -- the artwork url whose image is embedded in the published file, so a
+  -- retag can tell a changed cover from an unchanged one.
+  artwork_url         TEXT,
   error               TEXT,
   updated_at          TEXT    NOT NULL DEFAULT (datetime('now'))
 );

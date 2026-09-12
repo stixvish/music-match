@@ -8,12 +8,34 @@ from music.publish import fields, naming, tag, transcode
 
 log = logging.getLogger(__name__)
 
+# track ids whose cover was replaced by the most recent retag pass, so the
+# cli can say so instead of reporting a silent success.
+_REFRESHED: set[int] = set()
+
+
+def refreshed_artwork() -> set[int]:
+  """Tracks whose embedded cover was replaced since the last reset.
+
+  Returns:
+    The track ids.
+  """
+  return set(_REFRESHED)
+
+
+def reset_refreshed() -> None:
+  """Clear the record, at the start of a retag pass."""
+  _REFRESHED.clear()
+
+
 __all__ = [
   "fetch_artwork",
   "fields",
   "layout_path",
   "naming",
   "publish_track",
+  "refreshed_artwork",
+  "reset_refreshed",
+  "retag",
   "tag",
   "transcode",
 ]
@@ -101,7 +123,8 @@ def retag(conn: sqlite3.Connection, track_id: int) -> Path | None:
     The file's path, or None if the track has not been published.
   """
   row = conn.execute(
-    "SELECT published_path, genre_family FROM track WHERE id = ?", (track_id,)
+    "SELECT published_path, genre_family, artwork_url FROM track WHERE id = ?",
+    (track_id,),
   ).fetchone()
   if row is None or not row["published_path"]:
     return None
@@ -111,8 +134,23 @@ def retag(conn: sqlite3.Connection, track_id: int) -> Path | None:
     return None
 
   built = fields.build_for(conn, track_id)
-  # keep whatever artwork the file already has rather than re-fetching it
   existing = tag.read(path)
+
+  # Refresh the cover when the resolved artwork points somewhere new. Retag
+  # used to keep whatever the file already had, unconditionally — so a cover
+  # corrected in the review ui was written to the database, reported as saved,
+  # and never reached the file. The url that produced the embedded image is
+  # recorded on the track, which is the only way to tell a changed cover from
+  # an unchanged one without re-downloading every image on every retag.
+  wanted = fields.load_resolved(conn, track_id).get("artwork_url", "")
+  if wanted and wanted != (row["artwork_url"] or ""):
+    fetched = fetch_artwork(wanted)
+    if fetched:
+      built.tags.artwork = fetched
+      conn.execute("UPDATE track SET artwork_url = ? WHERE id = ?", (wanted, track_id))
+      _REFRESHED.add(track_id)
+    else:
+      log.warning("could not fetch new artwork for track %s", track_id)
   if existing.artwork and not built.tags.artwork:
     built.tags.artwork = existing.artwork
   tag.write(path, built.tags)
@@ -189,8 +227,11 @@ def publish_track(
 
   resolved = fields.load_resolved(conn, track_id)
   art_url = resolved.get("artwork_url", "")
+  embedded_url = ""
   if art_url:
     tags.artwork = fetch_artwork(art_url)
+    if tags.artwork:
+      embedded_url = art_url
   if not tags.artwork:
     # fall back to whatever the downloaded file already carried
     art = transcode.extract_artwork(source, staging / f"{track_id}.jpg")
@@ -201,8 +242,8 @@ def publish_track(
   dest.parent.mkdir(parents=True, exist_ok=True)
   work.replace(dest)
   conn.execute(
-    "UPDATE track SET published_path=?, status='published',"
+    "UPDATE track SET published_path=?, status='published', artwork_url=?,"
     " updated_at=datetime('now') WHERE id=?",
-    (str(dest), track_id),
+    (str(dest), embedded_url, track_id),
   )
   return dest

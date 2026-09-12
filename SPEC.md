@@ -891,6 +891,30 @@ collaboration — MusicBrainz joins the two with `&`, not `feat.`, and it is
 right. The catalogue's own distinction is the authority; inferring one from
 adjacent fields is not.
 
+### retag has to carry the cover too
+
+`retag` rebuilt every text frame from the database and then kept whatever
+artwork the file already held, unconditionally — `fields.build_for` treats
+`artwork_url` as a non-tag field, so `built.tags.artwork` was always empty and
+the existing image was restored every time. A cover corrected in the review ui
+was written to the database, reported as saved, and never reached the file.
+From the user's side that is indistinguishable from the edit not having been
+submitted at all.
+
+Schema v4 adds `track.artwork_url`: the url whose image is actually embedded.
+That is the only way to tell a changed cover from an unchanged one without
+re-downloading every image on every retag. `retag` re-fetches when the
+resolved url differs from the recorded one, and leaves the file alone
+otherwise.
+
+Measured on the real library the moment it worked: **112 of 113 covers
+replaced**, every one an artwork decision that had been stranded in the
+database.
+
+`music retag` now also reports what it did — covers replaced, files renamed,
+files missing — rather than a bare count. "I hit retag and I don't know if it
+did what I wanted" is a reporting failure as much as a functional one.
+
 ### a pasted link is fetched, not filed
 
 `POST /api/track/{id}/url` wrote an `override_url` row that **nothing ever
