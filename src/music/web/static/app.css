@@ -386,3 +386,15 @@ table.cells td { padding: 0.35rem 0.5rem; border-top: 1px solid var(--line); }
   font-size: 0.75rem; color: var(--warn);
   border: 1px dashed var(--warn); background: transparent;
 }
+
+/* --- destructive action --------------------------------------------------- */
+
+/* quiet until touched: deleting is available, not encouraged */
+button.danger {
+  color: var(--warn); border-color: var(--line); background: transparent;
+}
+button.danger:hover { border-color: var(--warn); }
+button.danger.armed {
+  background: var(--warn); border-color: transparent; color: #fff; font-weight: 600;
+}
+.pill.gone { color: var(--muted); border-color: var(--line); text-decoration: line-through; }

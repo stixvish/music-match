@@ -359,3 +359,29 @@ def test_a_pasted_link_clears_the_stale_reason_but_keeps_the_track_visible(clien
 
 def test_a_nonsense_link_is_still_rejected(client):
   assert client.post("/api/track/1/url", json={"url": "hello"}).status_code == 400
+
+
+# --- deleting a track ------------------------------------------------------
+
+
+def test_rejecting_a_track_over_http(client):
+  """The review ui is where a track is judged, so it is where it is dropped."""
+  r = client.post("/api/track/1/reject")
+  assert r.status_code == 200, r.text
+  body = r.json()
+  assert body["ok"]
+  assert body["label"] == "An Artist - A Song"
+
+  rows = client.get("/api/tracks?status=skipped").json()
+  assert len(rows) == 1
+  assert rows[0]["published_path"] is None
+
+
+def test_a_rejected_track_leaves_the_review_queue(client):
+  assert client.get("/api/tracks?status=review").json()
+  client.post("/api/track/1/reject")
+  assert client.get("/api/tracks?status=review").json() == []
+
+
+def test_rejecting_an_unknown_track_is_404(client):
+  assert client.post("/api/track/999/reject").status_code == 404

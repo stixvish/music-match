@@ -76,6 +76,11 @@ const api = {
       body: JSON.stringify({ field, value }),
     })).json();
   },
+  async reject(id) {
+    const r = await fetch(`/api/track/${id}/reject`, { method: 'POST' });
+    if (!r.ok) throw new Error((await r.json()).detail);
+    return r.json();
+  },
   async accept(id) { return (await fetch(`/api/track/${id}/accept`, { method: 'POST' })).json(); },
   async ingest(url) {
     const r = await fetch('/api/ingest', {
@@ -196,7 +201,7 @@ async function loadQueue({ keepDetail = false } = {}) {
 function renderTabs() {
   const c = state.counts;
   // wayfinding: the counts answer "what's here", the tabs "where can I go"
-  $('queue-count').innerHTML = ['review', 'published', 'all']
+  $('queue-count').innerHTML = ['review', 'published', 'skipped', 'all']
     .map((f) => `<button class="tab" data-f="${f}" aria-pressed="${state.filter === f}">
       ${f} <span class="n">${c[f] || 0}</span></button>`)
     .join('');
@@ -212,6 +217,7 @@ function renderTabs() {
 function renderQueue() {
   $('queue').innerHTML = state.list.map((t, i) => {
     const pills = [
+      t.status === 'skipped' ? '<span class="pill gone">deleted</span>' : '',
       t.published_path ? '<span class="pill done">published</span>' : '',
       t.reason ? `<span class="pill review">${esc(t.reason.replace('_', ' '))}</span>` : '',
       t.is_video_rip ? '<span class="pill rip">video rip</span>' : '',
@@ -294,6 +300,7 @@ function renderTrack() {
       : ''}
     <div style="display:flex;gap:.5rem;margin:.5rem 0 1rem">
       <button class="primary" id="accept">${t.published_path ? 'Re-tag' : 'Accept'} <kbd>↵</kbd></button>
+      <button class="danger" id="reject" title="Delete the audio and never download it again">Delete</button>
       <input class="url" id="url" type="text" placeholder="Paste a Spotify / MusicBrainz / Discogs link…">
     </div>
     ${fields.map((f) => {
@@ -355,6 +362,25 @@ function renderTrack() {
     });
   }
   $('accept').addEventListener('click', acceptCurrent);
+  // two steps rather than a modal: a browser dialog blocks the page, and this
+  // deletes real audio. the button asks, then means it.
+  let armed = 0;
+  $('reject').addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    if (!armed) {
+      btn.textContent = 'Really delete?';
+      btn.classList.add('armed');
+      armed = setTimeout(() => {
+        btn.textContent = 'Delete';
+        btn.classList.remove('armed');
+        armed = 0;
+      }, 4000);
+      return;
+    }
+    clearTimeout(armed);
+    armed = 0;
+    await rejectCurrent();
+  });
   $('url').addEventListener('change', async (e) => {
     try {
       const r = await api.override(t.id, e.target.value);
@@ -397,6 +423,28 @@ function renderCandidates(field) {
       renderTrack();
     });
   }
+}
+
+async function rejectCurrent() {
+  const row = state.list[state.index];
+  if (!row) return;
+  const el = document.querySelector(`.item[data-i="${state.index}"]`);
+  if (el) spring(el, 0, -24, { onFrame: (v) => {
+    el.style.transform = `translateY(${v}px)`;
+    el.style.opacity = String(Math.max(0, 1 + v / 24));
+  } });
+  try {
+    const r = await api.reject(row.id);
+    const mb = (r.freed_bytes || 0) / 1024 / 1024;
+    notice(`Deleted ${r.label} — ${mb.toFixed(1)} MB freed, will not download again`,
+      'written');
+  } catch (err) {
+    notice(err.message || 'Could not delete', 'failed');
+  }
+  state.selectedId = null;
+  pending.clear();
+  renderPending();
+  await loadQueue();
 }
 
 async function acceptCurrent() {

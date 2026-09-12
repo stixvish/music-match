@@ -15,6 +15,7 @@ from music.publish import (
   naming,
   publish_track,
   refreshed_artwork,
+  reject,
   reset_refreshed,
   retag,
   tag,
@@ -329,6 +330,19 @@ def create_app(database: Path | None = None) -> FastAPI:
       "renamed": bool(published) and Path(published) != Path(was or ""),
       "artwork_replaced": track_id in refreshed_artwork(),
     }
+
+  @app.post("/api/track/{track_id}/reject")
+  def reject_track(track_id: int) -> dict:
+    """Delete a track's audio and remember the decision (SPEC.md §14).
+
+    The `source_file` row survives as a tombstone, so re-ingesting the playlist
+    this came from skips it rather than downloading it again.
+    """
+    conn = connect()
+    try:
+      return {"ok": True, **reject(conn, track_id, cfg.paths.library)}
+    except RuntimeError as exc:
+      raise HTTPException(status_code=404, detail=str(exc)) from exc
 
   @app.post("/api/track/{track_id}/url")
   def url_override(track_id: int, body: UrlOverride) -> dict:

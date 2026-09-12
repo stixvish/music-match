@@ -906,6 +906,25 @@ collaboration — MusicBrainz joins the two with `&`, not `feat.`, and it is
 right. The catalogue's own distinction is the authority; inferring one from
 adjacent fields is not.
 
+### rejecting a track has to stick
+
+A hundred-track playlist brings in tracks that will never be played, so the
+review ui can delete one. Both copies go — the published AIFF and the staging
+download — because reclaiming the space is the reason for doing it.
+
+**The `source_file` row is deliberately kept.** `already_have` is checked
+before downloading (§8), so that row is a tombstone: re-ingesting the playlist
+the track came from skips it instead of fetching it again. Deleting the row
+would make the rejection last exactly until the next run of the same playlist,
+which is the case it exists for.
+
+The track keeps a `skipped` status and appears under its own filter, so a
+rejection reads as a decision rather than as a track that vanished. Deleting
+twice is harmless.
+
+The control is two-step — `Delete` then `Really delete?` — rather than a
+browser dialog. A dialog blocks the page, and this removes real audio.
+
 ### the library is flat
 
 Nesting was tried two ways and both lost to the data.

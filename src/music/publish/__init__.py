@@ -34,6 +34,7 @@ __all__ = [
   "naming",
   "prune_empty",
   "publish_track",
+  "reject",
   "refreshed_artwork",
   "reset_refreshed",
   "retag",
@@ -339,3 +340,79 @@ def publish_track(
     (str(dest), embedded_url, track_id),
   )
   return dest
+
+
+def reject(
+  conn: sqlite3.Connection, track_id: int, library: Path | None = None
+) -> dict[str, object]:
+  """Delete a track's audio and remember that it was rejected.
+
+  The `source_file` row is deliberately **kept**. `already_have` checks it
+  before downloading, so the tombstone is what stops the track reappearing the
+  next time its playlist is ingested — which is the whole point when a hundred
+  arrive at once and a dozen are never going to be played.
+
+  Both copies go: the published AIFF and the staging download. Reclaiming the
+  space is the reason for doing this, and the tombstone means the decision is
+  not lost with the bytes.
+
+  Args:
+    conn: Open connection.
+    track_id: Track to reject.
+    library: Library root, for pruning directories the file leaves empty.
+
+  Returns:
+    What was removed, for reporting.
+
+  Raises:
+    RuntimeError: If there is no such track.
+  """
+  row = conn.execute(
+    "SELECT t.published_path, s.staging_path, s.video_id,"
+    " (SELECT value FROM resolved_field WHERE track_id=t.id AND field='artist') artist,"
+    " (SELECT value FROM resolved_field WHERE track_id=t.id AND field='title') title"
+    " FROM track t JOIN source_file s ON s.id = t.source_file_id WHERE t.id = ?",
+    (track_id,),
+  ).fetchone()
+  if row is None:
+    raise RuntimeError(f"no track {track_id}")
+
+  freed = 0
+  removed: list[str] = []
+  for kind in ("published_path", "staging_path"):
+    raw = row[kind]
+    if not raw:
+      continue
+    path = Path(raw)
+    if not path.exists():
+      continue
+    freed += path.stat().st_size
+    path.unlink()
+    removed.append(kind.replace("_path", ""))
+    if kind == "published_path" and library is not None:
+      prune_empty(path.parent, library)
+
+  # a preview encoded from the published file would otherwise be orphaned
+  if library is not None:
+    preview = Path(row["staging_path"]).parent / f"{track_id}.preview.m4a"
+    if preview.exists():
+      freed += preview.stat().st_size
+      preview.unlink()
+
+  conn.execute("DELETE FROM review_queue WHERE track_id = ?", (track_id,))
+  conn.execute(
+    "UPDATE track SET status = 'skipped', published_path = NULL,"
+    " artwork_url = NULL, updated_at = datetime('now') WHERE id = ?",
+    (track_id,),
+  )
+  label = (
+    " - ".join(x for x in (row["artist"], row["title"]) if x) or f"track {track_id}"
+  )
+  log.info("rejected %s (%.1f MB reclaimed)", label, freed / 1024**2)
+  return {
+    "track_id": track_id,
+    "label": label,
+    "removed": removed,
+    "freed_bytes": freed,
+    "video_id": row["video_id"] or "",
+  }

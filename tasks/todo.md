@@ -112,6 +112,8 @@
   identity, but never one about the audio. 86.8% auto-accept, 0 covers (§12)
 - [x] **t38** search the library by artist, title, album, label or the name
   the track was searched under
+- [x] **t39** delete a track from the review ui; the tombstone stops a
+  re-ingest bringing it back
 - [ ] **cp7** review 50 real items, measure seconds/item vs §9's assumed 35 s
 
 ## phase 7 — the real run
