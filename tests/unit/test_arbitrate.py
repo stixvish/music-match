@@ -37,10 +37,70 @@ def test_beatport_leads_genre_for_electronic_only():
   assert precedence_for("pop", "genre")[0] == "discogs"
 
 
-def test_itunes_leads_for_world():
-  """ITunes has the strongest catalogue for regional music (SPEC.md §7)."""
-  for field in ("title", "artist", "album", "genre"):
+def test_itunes_leads_for_world_except_the_performer():
+  """ITunes has the strongest regional catalogue, but not the right convention.
+
+  Coverage and credit convention are different questions. Indian film music
+  credits the music director as the track artist — iTunes and Spotify both do,
+  MusicBrainz names the singer — so `artist` is the one field where iTunes does
+  not lead this family.
+  """
+  for field in ("title", "album", "genre"):
     assert precedence_for("world", field)[0] == "itunes"
+  assert precedence_for("world", "artist")[0] == "musicbrainz"
+  assert precedence_for("world", "album_artist")[0] == "itunes"
+
+
+def test_two_catalogues_sharing_a_convention_do_not_outvote_the_performer():
+  """The real shape of "Sanam Re", "Jeena Jeena" and "Jag Ghoomeya".
+
+  iTunes and Spotify agree because they follow the same convention, not
+  because they independently verified anything — so agreement is not evidence
+  here and precedence decides.
+  """
+  got = resolved(
+    arbitrate(
+      [
+        cand("artist", "Mithoon & Arijit Singh", "itunes"),
+        cand("artist", "Mithoon", "spotify"),
+        cand("artist", "Arijit Singh", "musicbrainz"),
+      ],
+      family="world",
+    )
+  )
+  assert got["artist"][0] == "Arijit Singh"
+
+
+def test_the_convention_exemption_is_scoped_to_world():
+  """Everywhere else two agreeing sources still beat one ranked higher."""
+  got = resolved(
+    arbitrate(
+      [
+        cand("artist", "Morgan Wallen", "itunes"),
+        cand("artist", "Morgan Wallen", "spotify"),
+        cand("artist", "Metro Station", "musicbrainz"),
+      ],
+      family="pop",
+    )
+  )
+  assert got["artist"][0] == "Morgan Wallen"
+
+
+def test_album_artist_keeps_the_fuller_credit_in_world():
+  """Vocalists on the artist line, composers allowed on album artist."""
+  got = resolved(
+    arbitrate(
+      [
+        cand("artist", "Mithoon & Arijit Singh", "itunes"),
+        cand("artist", "Arijit Singh", "musicbrainz"),
+        cand("album", "Sanam Re", "itunes"),
+        cand("album_artist", "Mithoon", "itunes"),
+      ],
+      family="world",
+    )
+  )
+  assert got["artist"][0] == "Arijit Singh"
+  assert got["album_artist"][0] == "Mithoon"
 
 
 def test_unranked_field_still_gets_a_value():

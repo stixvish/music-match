@@ -891,6 +891,33 @@ collaboration — MusicBrainz joins the two with `&`, not `feat.`, and it is
 right. The catalogue's own distinction is the authority; inferring one from
 adjacent fields is not.
 
+### convention is not consensus
+
+Indian film music credits the **music director** as the track artist. iTunes
+returns `Mithoon & Arijit Singh` for "Sanam Re" and Spotify returns `Mithoon`;
+both name the composer. MusicBrainz returns the singer, `Arijit Singh`.
+
+The house convention is **vocalists on the artist line, the fuller credit on
+album artist**, so MusicBrainz is right here and the `world` table now ranks it
+first for `artist` — the one field where iTunes does not lead this family.
+Coverage and credit convention are different questions, and §7 conflated them.
+
+Precedence alone was not enough. iTunes and Spotify agree, so agreement handed
+the field to the composer regardless of ranking. **Two catalogues following the
+same convention and agreeing is not independent evidence — it is the same
+convention counted twice**, so `CONVENTION_FIELDS` marks `artist` in `world` as
+decided by precedence rather than by agreement. The exemption is scoped: in
+every other family two agreeing sources still beat one ranked higher, which is
+what rescued twelve tracks earlier.
+
+**This exposed a second bug.** Compilation detection treats "an album artist
+that is not the track artist" as the giveaway, which is sound where both name
+the same act — but in film music they never do. With vocalists on the artist
+line, every Bollywood album suddenly looked like a compilation and the whole
+album group would have been discarded. That signal is now disabled for
+families in `CONVENTION_FIELDS`, leaving the explicit various-artists credit as
+the test. Measured: 49 world albums kept, 0 dropped, 19 artists corrected.
+
 ### retag has to carry the cover too
 
 `retag` rebuilt every text frame from the database and then kept whatever

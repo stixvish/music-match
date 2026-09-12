@@ -30,6 +30,33 @@ from music.sources.base import ALBUM_GROUP, FieldCandidate
 # are all genuinely correct.
 JUDGEMENT_FIELDS = ("genre", "artwork_url")
 
+# Fields where sources differ by *convention* rather than by fact, per family.
+# Two catalogues following the same convention and agreeing is not independent
+# evidence — it is the same convention counted twice — so consensus is skipped
+# and precedence decides.
+#
+# Indian film music credits the music director as the track artist: for
+# "Sanam Re" iTunes returns `Mithoon & Arijit Singh` and Spotify returns
+# `Mithoon`, both naming the composer, while MusicBrainz returns the vocalist
+# `Arijit Singh`. The house convention is vocalists on the artist line and the
+# fuller credit on album artist, so `artist` is decided by precedence in this
+# family and `album_artist` is deliberately left alone.
+CONVENTION_FIELDS: dict[str, tuple[str, ...]] = {"world": ("artist",)}
+
+
+def _skips_consensus(family: str, field: str) -> bool:
+  """Whether agreement between sources is evidence for this field.
+
+  Args:
+    family: Genre family.
+    field: Field name.
+
+  Returns:
+    True when precedence should decide instead of agreement.
+  """
+  return field in JUDGEMENT_FIELDS or field in CONVENTION_FIELDS.get(family, ())
+
+
 # dates are not chosen by precedence. SPEC.md §7 wants the *earliest* release
 # of the recording, and sources disagree in both value and precision: for
 # "Tum Hi Ho" musicbrainz returned a bare "2013" while itunes returned
@@ -142,7 +169,9 @@ _OVERRIDES: dict[str, dict[str, tuple[str, ...]]] = {
     # itunes has the strongest catalogue for regional music, where
     # musicbrainz and discogs are both thin (§7)
     "title": ("itunes", "musicbrainz", "spotify", "discogs"),
-    "artist": ("itunes", "musicbrainz", "spotify"),
+    # musicbrainz first for the performer: itunes and spotify both credit the
+    # music director, which is the film-industry convention, not the singer
+    "artist": ("musicbrainz", "itunes", "spotify"),
     "album": ("itunes", "musicbrainz", "spotify"),
     "album_artist": ("itunes", "musicbrainz", "spotify"),
     "track_number": ("itunes", "musicbrainz", "spotify"),
@@ -204,14 +233,22 @@ def _norm(text: str) -> str:
 
 
 def _is_compilation(
-  candidates: Sequence[FieldCandidate], source: str, artist: str = ""
+  candidates: Sequence[FieldCandidate],
+  source: str,
+  artist: str = "",
+  *,
+  credit_differs_by_convention: bool = False,
 ) -> bool:
   """Whether a source's album looks like a compilation rather than the album.
 
   Two signals, the second much more general than the first:
 
   1. an explicit various-artists credit
-  2. **an album artist that is not the track artist.** "Fireball" resolved to
+  2. **an album artist that is not the track artist.** Only when the two are
+     expected to match: Indian film music credits the music director on the
+     album and the singer on the track, so this signal is off for that family
+     or every Bollywood album is discarded as a compilation. "Fireball"
+     resolved to
      "Mastermix Classic Cuts, Volume 165" credited to "Music Factory" — a DJ
      service compilation that never says "Various Artists". If the track is by
      Pitbull, the album it belongs to is credited to Pitbull.
@@ -220,6 +257,8 @@ def _is_compilation(
     candidates: All candidates for a track.
     source: Source name to check.
     artist: The track's artist, for signal 2.
+    credit_differs_by_convention: Disables signal 2 for families where the
+      album and track credits are expected to differ.
 
   Returns:
     True if that source's album looks like a compilation.
@@ -232,7 +271,10 @@ def _is_compilation(
     return False
   if credit.strip().casefold() in COMPILATION_CREDITS:
     return True
-  if not artist:
+  if not artist or credit_differs_by_convention:
+    # signal 2 only works where the album and the track are credited to the
+    # same act. In Indian film music they are not, so an explicit
+    # various-artists credit is the only signal left.
     return False
   left, right = _norm(credit), _norm(artist)
   # a substring match covers "David Guetta" vs "David Guetta & Akon"
@@ -240,7 +282,11 @@ def _is_compilation(
 
 
 def _best_album_source(
-  candidates: Sequence[FieldCandidate], ranked: Iterable[str], artist: str = ""
+  candidates: Sequence[FieldCandidate],
+  ranked: Iterable[str],
+  artist: str = "",
+  *,
+  loose_credit: bool = False,
 ) -> str | None:
   """Pick one source to supply every album field.
 
@@ -257,6 +303,8 @@ def _best_album_source(
       source's album credit against it, so passing an arbitrary candidate
       inverts the test: when a bad source won `artist`, every correct album
       looked like a compilation and was discarded.
+    loose_credit: Set when the family credits the album and the track
+      differently by convention, which disables that comparison.
 
   Returns:
     The winning source name, or None if no source offers any album field.
@@ -268,7 +316,13 @@ def _best_album_source(
   if not offered:
     return None
 
-  real = [s for s in offered if not _is_compilation(candidates, s, artist)]
+  real = [
+    s
+    for s in offered
+    if not _is_compilation(
+      candidates, s, artist, credit_differs_by_convention=loose_credit
+    )
+  ]
   if not real:
     # every source offered only a compilation. "Down" resolved to
     # "Ultra Dance 11" credited to DJ Enferno, which is where the track was
@@ -348,13 +402,26 @@ def arbitrate(
   artist_options = by_field.get("artist", [])
   artist_winner = (
     _consensus(artist_options, ranking(family, "artist"), "artist")
-    if artist_options
-    else None
+    if artist_options and not _skips_consensus(family, "artist")
+    else next(
+      (
+        c
+        for source in ranking(family, "artist")
+        for c in artist_options
+        if c.source == source
+      ),
+      artist_options[0] if artist_options else None,
+    )
   )
   artist_value = artist_winner.value if artist_winner else ""
 
   # album fields come from a single source, chosen once (SPEC.md §7)
-  album_source = _best_album_source(candidates, ranking(family, "album"), artist_value)
+  album_source = _best_album_source(
+    candidates,
+    ranking(family, "album"),
+    artist_value,
+    loose_credit=bool(CONVENTION_FIELDS.get(family)),
+  )
   album_value = ""
   for field in ALBUM_GROUP:
     if album_source is None:
@@ -390,7 +457,7 @@ def arbitrate(
       continue
     ranked = ranking(family, field)
     winner = (
-      _consensus(options, ranked, field) if field not in JUDGEMENT_FIELDS else None
+      None if _skips_consensus(family, field) else _consensus(options, ranked, field)
     )
     if winner is None:
       winner = next(
