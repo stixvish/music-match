@@ -291,6 +291,13 @@ def cmd_doctor(args: argparse.Namespace) -> int:
   print(f"  free disk  {free_gb:.0f} GB (library needs ~80 GB)")
   ok &= free_gb > 100
 
+  source = (
+    f"cookie_file {cfg.youtube.cookie_file}"
+    if cfg.youtube.cookie_file
+    else f"{cfg.youtube.cookie_browser} profile (rotates; see SPEC.md §6)"
+  )
+  print(f"  cookies    {source}")
+
   if not args.offline:
     ok &= _check_premium_audio(cfg)
 

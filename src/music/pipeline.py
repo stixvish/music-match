@@ -130,7 +130,21 @@ class YtdlSink:
     self._buffer.add(msg)
 
   def warning(self, msg: str) -> None:
-    """Record a warning."""
+    """Record a warning, escalating the one that stops a run dead."""
+    if "cookies are no longer valid" in msg:
+      # yt-dlp checks after every request whether LOGIN_INFO is still in the
+      # jar. YouTube rotates account cookies on open tabs, so ordinary browsing
+      # invalidates whatever was read from that profile — and re-reading it
+      # more often does not help, because the browsing is the cause.
+      self._buffer.add(msg, "error")
+      self._buffer.add(
+        "  YouTube rotated the cookies. Re-reading the browser will not fix"
+        " this: export once from a private window instead and set"
+        " youtube.cookie_file (SPEC.md §6).",
+        "error",
+      )
+      self._progress.cookies_invalid = True
+      return
     self._buffer.add(msg, "warn")
 
   def error(self, msg: str) -> None:
@@ -178,6 +192,7 @@ class Progress:
   progress_line: str = ""
   finished: bool = False
   cookies_refreshed: bool = False
+  cookies_invalid: bool = False
   error: str = ""
   failures: list[str] = field(default_factory=list)
 

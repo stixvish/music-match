@@ -68,6 +68,7 @@ def refresh_cookies() -> None:
   cached per *process* while its own docstring claimed per *run*.
   """
   global _COOKIE_JAR
+  # only the temp jar we extracted; an exported cookie_file belongs to the user
   if _COOKIE_JAR is not None:
     _COOKIE_JAR.unlink(missing_ok=True)
   _COOKIE_JAR = None
@@ -97,6 +98,15 @@ def _cookie_jar(cfg: YouTubeConfig) -> Path | None:
     caller falls back to per-call extraction rather than losing authentication.
   """
   global _COOKIE_JAR
+  # An exported file wins and is never refreshed: it is the user's, and it came
+  # from a session nothing is rotating. Re-reading the live profile is the
+  # thing that breaks.
+  if cfg.cookie_file:
+    exported = Path(cfg.cookie_file).expanduser()
+    if exported.is_file():
+      return exported
+    log.warning("cookie_file %s does not exist; falling back to the browser", exported)
+
   if _COOKIE_JAR is not None and _COOKIE_JAR.exists():
     return _COOKIE_JAR
   try:

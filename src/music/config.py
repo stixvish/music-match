@@ -48,6 +48,12 @@ class YouTubeConfig:
   """How audio is fetched. See SPEC.md §6."""
 
   cookie_browser: str = "chrome"
+  # Path to a cookies.txt exported from a *private* YouTube session. Preferred
+  # over reading the live browser profile: YouTube rotates account cookies on
+  # open tabs as a security measure, so ordinary browsing invalidates whatever
+  # was exported from that profile. A private session that is closed and never
+  # reopened has nothing to rotate it (SPEC.md §6).
+  cookie_file: str = ""
   # 141 (aac 44.1k) is preferred over 774 (opus 48k, resampled). SPEC.md §4.
   format_chain: str = "141/774/140/251"
   player_client: str = "web_music"

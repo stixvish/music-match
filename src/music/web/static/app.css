@@ -438,3 +438,4 @@ button.danger.armed {
   .field .label { margin-left: 0.1rem; }
   .field .src { justify-self: start; margin-left: 0.1rem; }
 }
+.art-pending { color: var(--warn); text-transform: none; letter-spacing: 0; }

@@ -1268,6 +1268,25 @@ database.
 files missing — rather than a bare count. "I hit retag and I don't know if it
 did what I wanted" is a reporting failure as much as a functional one.
 
+### a pasted link has to be visible
+
+The link endpoint fetched the entity and wrote every field as `url_override`,
+and the ui wrote a confirmation into the box and **re-rendered nothing**. The
+database was right and the screen showed the old record, which is
+indistinguishable from the link having been ignored — and a link is pasted
+precisely when the automatic answer was wrong, so it is the worst possible
+moment to look inert.
+
+The pane now re-renders from the applied values, the affected fields join the
+unwritten list, and the notice names what came back:
+`spotify: Frank Ocean — Lost · channel ORANGE — press Re-tag to write it`.
+
+**The cover needed more than a re-render.** For a published track the ui shows
+the *embedded* image, which cannot change until a retag, so a corrected cover
+still looked ignored. `track.artwork_url` records what is actually embedded, so
+when the resolved cover differs the pending image is shown instead, labelled
+"not yet in the file".
+
 ### a pasted link is fetched, not filed
 
 `POST /api/track/{id}/url` wrote an `override_url` row that **nothing ever
@@ -1336,6 +1355,37 @@ policy — the alternative is discovering it three hours into a 2,329-track run.
 If it ever does change, the options are a PO token provider plugin
 (`bgutil-ytdlp-pot-provider`) or a client that needs no token (`android_vr`,
 `web_embedded`), both at some cost to available formats.
+
+### re-reading the browser is the problem, not the fix
+
+An earlier revision extracted cookies once per *run* on the reasoning that
+YouTube rotates them. It does — but re-reading the live browser profile does
+not help, because ordinary browsing is what rotates them. yt-dlp checks after
+every request whether `LOGIN_INFO` is still present and reports:
+
+```
+The provided YouTube account cookies are no longer valid.
+They have likely been rotated in the browser as a security measure.
+```
+
+yt-dlp's own guidance (read 2026-09-12) is to avoid `--cookies-from-browser`
+for YouTube entirely: open a **private window**, log in, visit
+`youtube.com/robots.txt` in that same tab, export with a cookie extension, and
+**close the window**. That session is never reopened, so nothing rotates it.
+The guide notes explicitly that `--cookies-from-browser` cannot capture a
+private session.
+
+`youtube.cookie_file` therefore takes precedence over browser extraction, is
+used verbatim, and is **never refreshed or deleted** — it is the user's file
+from a session nothing is rotating. Browser extraction stays as the fallback,
+still once per run, with the rotation warning escalated from a yt-dlp warning
+to an error in the console carrying the remedy. `music doctor` reports which
+source is in use.
+
+This reverses the previous section's conclusion. The measurement that changed
+it was the failure itself: metadata extraction and format listing both worked,
+so the cookies were not simply "expired" — they were being rotated out from
+under an otherwise healthy session.
 
 ### cookies are extracted once per run
 

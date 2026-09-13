@@ -273,7 +273,12 @@ function renderTrack() {
   const artUrls = [...new Set(d.candidates
     .filter((c) => c.field === 'artwork_url' && c.value).map((c) => c.value))];
   const chosenArt = resolved.artwork_url?.value || preview.artwork_url?.value;
-  const embedded = t.published_path ? `/api/artwork/${t.id}` : null;
+  // `track.artwork_url` records the cover actually embedded in the file. When
+  // the resolved one differs — a link was pasted, or a cover was picked — show
+  // the pending image, because showing the embedded one makes an applied
+  // change look ignored.
+  const artPending = Boolean(chosenArt && chosenArt !== (t.artwork_url || ''));
+  const embedded = t.published_path && !artPending ? `/api/artwork/${t.id}` : null;
 
   $('track').innerHTML = `
     <div class="art-row">
@@ -285,7 +290,8 @@ function renderTrack() {
           ? `<img class="art" src="${esc(chosenArt)}" alt="cover art">`
           : '<div class="art empty-art">no art</div>'}
       <div>
-        <div class="label" style="margin-bottom:.35rem">Cover art</div>
+        <div class="label" style="margin-bottom:.35rem">Cover art${
+          artPending ? ' · <span class="art-pending">not yet in the file</span>' : ''}</div>
         <div class="art-choices">
           ${artUrls.map((u) => `<img class="art-choice ${u === chosenArt ? 'chosen' : ''}"
               src="${esc(u)}" data-art="${esc(u)}" alt="candidate cover"
@@ -391,7 +397,19 @@ function renderTrack() {
   $('url').addEventListener('change', async (e) => {
     try {
       const r = await api.override(t.id, e.target.value);
-      e.target.value = `${r.provider} ${r.kind} ${r.id}`;
+      e.target.value = '';
+      e.target.placeholder = `${r.provider} · ${r.fields} fields applied`;
+      // The link rewrites the whole record, so the screen has to show that.
+      // It used to write a confirmation into the box and re-render nothing,
+      // which looks identical to the link having been ignored.
+      for (const f of ['title', 'artist', 'album', 'album_artist',
+        'track_number', 'disc_number', 'isrc', 'artwork_url']) markPending(f);
+      notice(
+        `${r.provider}: ${r.artist || '?'} — ${r.title || '?'}`
+        + `${r.album ? ` · ${r.album}` : ''} — press Re-tag to write it`,
+      );
+      state.detail = await api.track(t.id);
+      renderTrack();
     } catch (err) { e.target.value = ''; e.target.placeholder = err.message; }
   });
   const first = state.field && fields.includes(state.field) ? state.field : fields[0];
