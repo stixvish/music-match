@@ -1687,6 +1687,32 @@ behaves the same in Finder, Rekordbox and Serato:
 | Both may co-occur, features first | `Title (ft. Guest) [Someone Remix]` |
 | Mix/remix designation is never dropped | — |
 
+**A version designation has two shapes.** The first contains a version word —
+`remix`, `edit`, `mix`, `bootleg`, `flip`, `vip`, `version`, `rework` — and is
+recognised whatever else it holds: `[Tom Santa Remix]`, `[2019 Edit]`. The
+second is a phrase made *entirely* of generic labels, with no version word at
+all: `Human (Extended)`, `Say It (Radio)`. Labels ship these routinely.
+
+The second shape was missing, and the failure was not that the label was lost
+— it was that the bracket was not recognised as a version, so it stayed glued
+to the base title and sorted *before* the feature: `Human [Extended] (ft.
+Echoes)`, inverting the features-first rule above. Measured across the 466
+distinct titles the library has seen (winners and every source candidate), 5
+render differently under the rule and all 5 move toward house style; no
+published title changed.
+
+The generic-label list is closed (`GENERIC_VERSIONS`) and every word of the
+phrase must be in it, because a bracket misread as a version is silently
+reordered out of the title it belongs to: `Roar (Original Sin)` is a
+parenthetical, not a cut.
+
+**The credit comes out before the mix.** The dash form of a mix runs to the end
+of the string, so reading the mix first swallowed a trailing credit into it:
+`Last Day - Dualities Remix (feat. Josie Dunne)` published as `Last Day
+[Dualities Remix (feat. Josie Dunne)]`, hiding the guest from any search for
+her name. A bracketed `(ft. …)` is the one unambiguous clause in a title, so it
+is extracted first and the mix is read from what remains.
+
 > **Two different normalisations, do not conflate them.** §6.5 *query*
 > normalisation strips everything down to bare artist/title so sources can be
 > matched. This is *canonical output* formatting, applied after arbitration to
