@@ -19,17 +19,59 @@ from dataclasses import dataclass
 
 # "feat.", "featuring", "ft" -> "ft."
 _FEAT = re.compile(r"\b(?:feat\.?|featuring|ft\.?)\s+", re.IGNORECASE)
-# a trailing "(...)" or "[...]" naming a remix, edit, mix, bootleg or version
+
+# version labels that describe a cut rather than name a person. "Extended Mix"
+# has no remixer; "Tom Santa Remix" does.
+GENERIC_VERSIONS = (
+  "extended",
+  "original",
+  "radio",
+  "club",
+  "instrumental",
+  "acapella",
+  "a cappella",
+  "vip",
+  "dub",
+  "intro",
+  "short",
+  "clean",
+  "explicit",
+)
+
+# A version designation has one of two shapes.
+#
+# The first is a phrase containing a version word, whatever else it holds:
+# "Tom Santa Remix", "2019 Edit".
+#
+# The second is a phrase made *entirely* of generic labels, with no version
+# word at all: `Human (Extended)`, `Say It (Radio)`. Labels ship these, and
+# without the second shape the bracket is not recognised as a version, so it
+# stays glued to the base title and sorts before the feature --
+# `Human [Extended] (ft. Echoes)` instead of house style's features-first
+# `Human (ft. Echoes) [Extended]` (SPEC.md 14).
+#
+# The second shape is deliberately strict -- every word must be a known label --
+# because a bracket misread as a version is silently reordered out of the title
+# it belongs to: `Roar (Original Sin)` is a parenthetical, not a cut.
+_VERSIONS = r"remix|edit|mix|bootleg|flip|vip|version|rework"
+_GENERIC = "|".join(
+  re.escape(v) for v in sorted(GENERIC_VERSIONS, key=len, reverse=True)
+)
+_GENERIC_PHRASE = rf"(?:{_GENERIC})(?:\s+(?:{_GENERIC}))*"
+# a trailing "(...)" or "[...]" naming a version
 _MIX = re.compile(
-  r"[\(\[]\s*([^)\]]*\b(?:remix|edit|mix|bootleg|flip|vip|version|rework)\b"
-  r"[^)\]]*)\s*[\)\]]",
+  rf"[\(\[]\s*((?:[^)\]]*\b(?:{_VERSIONS})\b[^)\]]*|{_GENERIC_PHRASE}))\s*[\)\]]",
   re.IGNORECASE,
 )
 # " - Something Remix" (the dash form beatport and youtube both use)
 _MIX_DASH = re.compile(
-  r"\s+[-–]\s+([^-–]*\b(?:remix|edit|mix|bootleg|flip|vip|version|rework)\b"
-  r"[^-–]*)$",
+  rf"\s+[-–]\s+((?:[^-–]*\b(?:{_VERSIONS})\b[^-–]*|{_GENERIC_PHRASE}))$",
   re.IGNORECASE,
+)
+# a version label sitting at the end of an unbracketed feature credit:
+# "ft. Echoes Extended" gives up "Extended" and keeps "Echoes" as the guest.
+_FEAT_TAIL_VERSION = re.compile(
+  rf"\s+({_GENERIC_PHRASE}(?:\s+(?:{_VERSIONS}))?)$", re.IGNORECASE
 )
 # A trailing `(From "Film")` / `[From the Motion Picture ...]`. Indian film
 # catalogues append the film to the track title; it is provenance, not part of
@@ -128,6 +170,17 @@ def canonical_title(raw: str) -> str:
       break
     text = stripped
 
+  # A bracketed credit is the one unambiguous clause here, so it comes out
+  # first. The dash form of a mix runs to the end of the string -- `Last Day -
+  # Dualities Remix (feat. Josie Dunne)` -- and swallowed the guest into the
+  # mix name when the mix was read first.
+  text = _FEAT.sub("ft. ", text)
+  feat = ""
+  feat_match = _FEAT_GROUP.search(text)
+  if feat_match:
+    feat = feat_match.group(1).strip()
+    text = _SPACES.sub(" ", text[: feat_match.start()] + text[feat_match.end() :])
+
   mix = ""
   match = _MIX.search(text)
   if match:
@@ -139,17 +192,19 @@ def canonical_title(raw: str) -> str:
       mix = dash.group(1).strip()
       text = text[: dash.start()]
 
-  text = _FEAT.sub("ft. ", text)
-  feat = ""
-  feat_match = _FEAT_GROUP.search(text)
-  if feat_match:
-    feat = feat_match.group(1).strip()
-    text = text[: feat_match.start()] + text[feat_match.end() :]
-  else:
+  if not feat:
     bare = re.search(r"\bft\.\s+(.+)$", text)
     if bare:
       feat = bare.group(1).strip()
       text = text[: bare.start()]
+      # an unbracketed credit swallows whatever follows it, so a version typed
+      # after the guest -- "Human ft. Echoes Extended" -- lands inside the
+      # guest's name. Only a known label is taken back, never a real name.
+      if not mix:
+        tail = _FEAT_TAIL_VERSION.search(feat)
+        if tail and feat[: tail.start()].strip():
+          mix = tail.group(1).strip()
+          feat = feat[: tail.start()].strip()
 
   base = _SPACES.sub(" ", text).strip(" -–")
   parts = [base]
@@ -181,24 +236,6 @@ def safe_component(raw: str) -> str:
     return "unknown"
   return text[:120].strip() or "unknown"
 
-
-# version labels that describe a cut rather than name a person. "Extended Mix"
-# has no remixer; "Tom Santa Remix" does.
-GENERIC_VERSIONS = (
-  "extended",
-  "original",
-  "radio",
-  "club",
-  "instrumental",
-  "acapella",
-  "a cappella",
-  "vip",
-  "dub",
-  "intro",
-  "short",
-  "clean",
-  "explicit",
-)
 
 _VERSION_WORD = re.compile(
   r"\b(remix|mix|edit|rework|flip|bootleg|version|dub)\b", re.IGNORECASE

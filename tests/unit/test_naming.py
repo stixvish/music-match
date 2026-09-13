@@ -249,3 +249,73 @@ def test_a_film_suffix_is_provenance_not_title(given, want):
 def test_an_ordinary_from_is_left_alone(title):
   """Narrow on purpose: a missed strip is cosmetic, a wrong one is destructive."""
   assert naming.canonical_title(title) == title
+
+
+# A label ships a bare cut with no version word in it at all. Every one of
+# these is the same recording -- John Summit's "Human" with Echoes, extended --
+# arriving from a different source, or typed by hand into the review ui.
+BARE_VERSIONS = [
+  ("Human (ft. Echoes) [Extended]", "Human (ft. Echoes) [Extended]"),
+  ("Human (feat. Echoes) - Extended", "Human (ft. Echoes) [Extended]"),
+  ("Human ft. Echoes Extended", "Human (ft. Echoes) [Extended]"),
+  ("Human featuring Echoes Extended", "Human (ft. Echoes) [Extended]"),
+  ("Human feat. Echoes Extended Mix", "Human (ft. Echoes) [Extended Mix]"),
+  ("Say It (Radio)", "Say It [Radio]"),
+  ("Say It (Instrumental)", "Say It [Instrumental]"),
+]
+
+
+@pytest.mark.parametrize(("raw", "expected"), BARE_VERSIONS)
+def test_a_bare_version_label_is_a_version(raw, expected):
+  """`Extended` alone used to go unrecognised, so it sorted before the feature.
+
+  The result was `Human [Extended] (ft. Echoes)` -- house style inverted --
+  and a manual correction that reverted on every re-tag.
+  """
+  assert naming.canonical_title(raw) == expected
+
+
+def test_the_feature_always_precedes_the_version():
+  """House style is features first, whichever order the source wrote them."""
+  for raw in (
+    "Human (Extended) (feat. Echoes)",
+    "Human (feat. Echoes) (Extended)",
+    "Human (Extended Mix) (feat. Echoes)",
+  ):
+    out = naming.canonical_title(raw)
+    assert out.index("(ft.") < out.index("[")
+
+
+@pytest.mark.parametrize(
+  "title",
+  [
+    # every word must be a known label, so a parenthetical that merely starts
+    # with one is left alone. Misreading a bracket silently reorders a title.
+    "Roar (Original Sin)",
+    "Welcome (Club Kids)",
+    "Sunshine (Radio Ga Ga)",
+    "Fade (Intro Skit Two)",
+  ],
+)
+def test_a_parenthetical_is_not_a_version(title):
+  assert naming.canonical_title(title) == title
+
+
+def test_a_bare_version_groups_with_the_plain_title():
+  """Consensus compares titles with the version removed (SPEC.md §7)."""
+  assert naming.strip_version("Human (Extended)") == "Human"
+  assert naming.extract_version("Human (Extended)").mix_name == "Extended"
+  assert naming.extract_version("Human (Extended)").remixer == ""
+
+
+def test_a_dash_mix_does_not_swallow_the_guest():
+  """The dash form runs to end of string, so the credit comes out first.
+
+  Seen on a real track: `Last Day - Dualities Remix (feat. Josie Dunne)`
+  published as `Last Day [Dualities Remix (feat. Josie Dunne)]`, which hides
+  the guest from any search for her name.
+  """
+  assert (
+    naming.canonical_title("Last Day - Dualities Remix (feat. Josie Dunne)")
+    == "Last Day (ft. Josie Dunne) [Dualities Remix]"
+  )

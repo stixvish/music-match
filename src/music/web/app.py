@@ -263,13 +263,16 @@ def create_app(database: Path | None = None) -> FastAPI:
   def edit_field(track_id: int, edit: FieldEdit) -> dict:
     """Set a field by hand. Marked `manual`, so no resolver run overwrites it."""
     conn = connect()
+    # a stray trailing space survives into the tag and the filename, where it
+    # is invisible and breaks equality with the same value typed cleanly.
+    value = edit.value.strip()
     conn.execute(
       "INSERT OR REPLACE INTO resolved_field"
       " (track_id, field, value, source, decided_by)"
       " VALUES (?,?,?,'manual','manual')",
-      (track_id, edit.field, edit.value),
+      (track_id, edit.field, value),
     )
-    return {"ok": True, "field": edit.field, "value": edit.value}
+    return {"ok": True, "field": edit.field, "value": value}
 
   @app.post("/api/track/{track_id}/accept")
   def accept(track_id: int) -> dict:
