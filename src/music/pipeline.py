@@ -451,10 +451,10 @@ def ingest(
   # together, and de-duplicating across them, means a track appearing on two
   # playlists is downloaded once rather than downloaded and then skipped.
   urls = [u for u in re.split(r"[\s,]+", url) if u]
-  # Fresh cookies for every run. YouTube rotates session cookies, so a jar
-  # kept for the life of the process goes stale — and the web ui's server is a
-  # process that stays up for days.
-  refresh_cookies()
+  # Deliberately no cookie refresh here. yt-dlp writes rotated cookies back to
+  # the jar on exit, so it stays current by itself; re-reading the browser
+  # every run discarded those and restored the browser's older copy, which is
+  # what eventually failed authentication (SPEC.md §6).
   step("enumerate", f"$ music ingest {' '.join(urls)}")
   try:
     refs = []

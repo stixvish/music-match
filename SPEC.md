@@ -1356,6 +1356,74 @@ If it ever does change, the options are a PO token provider plugin
 (`bgutil-ytdlp-pot-provider`) or a client that needs no token (`android_vr`,
 `web_embedded`), both at some cost to available formats.
 
+### the cookie jar keeps itself current
+
+`YoutubeDL.save_cookies` writes the jar back to `cookiefile` when a run exits —
+but only when a **file** was supplied, never when `--cookies-from-browser` was
+used:
+
+```python
+def save_cookies(self):
+    if self.params.get('cookiefile') is not None:
+        self.cookiejar.save()
+```
+
+YouTube rotates the session during a run. With a file, those rotations are
+persisted and the next run starts from current cookies. With
+`--cookies-from-browser` they are discarded and the browser's older copy is
+read again — so the jar goes stale **because of our own runs**, on a machine
+where the browser is never used for YouTube at all. That is what produced
+"The provided YouTube account cookies are no longer valid", and re-extracting
+per run made it certain rather than fixing it.
+
+The jar therefore lives at `~/.config/musicpipeline/youtube-cookies.txt`
+(mode 600, overridable with `youtube.cookie_file`), is created from the browser
+**once** when absent, and is then left alone for yt-dlp to maintain. Measured:
+two consecutive downloads, jar contents changed between them, itag 141 at
+258 kbps both times.
+
+Reading the browser is now the recovery path only — a download downgraded
+below the bitrate floor, or `music cookies` when asked.
+
+**`music cookies` exports without a browser extension.** `--list` names the
+browser profiles; `--profile` picks one. Only the YouTube-bearing domains are
+kept: a whole-profile export put 98 cookies on disk including unrelated sites,
+where 56 are Google and YouTube. An authenticated jar is a credential (§13),
+so it is never written into the repository and the file is checked for a real
+YouTube login before being reported as good.
+
+A dedicated browser profile is still worth having if the same browser is used
+to watch YouTube, since browsing rotates the session too — but it is not
+required when it is not.
+
+### the PO token warning, and why it is not yet a problem
+
+yt-dlp 2026.08.19 warns on every fetch:
+
+```
+web_music client https formats require a GVS PO Token which was not provided.
+They will be skipped as they may yield HTTP Error 403.
+```
+
+`web_music` is the client §4 chose in order to get itag 141, so a skipped
+format would drop the run to itag 140 at 128 kbps — below the bitrate floor,
+and every track would fail.
+
+It does not, because **a GVS PO Token is not required for YouTube Premium
+subscribers** (yt-dlp PO-Token-Guide, read 2026-09-12). Measured the same day:
+6 of 6 downloads returned itag 141 at 258 kbps. The warning is generic; the
+exemption is real.
+
+That exemption is outside our control, so `music doctor` now downloads one
+short track and reports the itag and bitrate it actually received. A
+pre-flight check is the right place for a dependency on somebody else's
+policy — the alternative is discovering it three hours into a 2,329-track run.
+`--offline` skips it.
+
+If it ever does change, the options are a PO token provider plugin
+(`bgutil-ytdlp-pot-provider`) or a client that needs no token (`android_vr`,
+`web_embedded`), both at some cost to available formats.
+
 ### re-reading the browser is the problem, not the fix
 
 An earlier revision extracted cookies once per *run* on the reasoning that

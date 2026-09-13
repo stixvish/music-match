@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from music import config, db, pipeline
+from music.acquire.youtube import cookie_path as youtube_cookie_path
 from music.arbitrate import rearbitrate
 from music.publish import refreshed_artwork, reset_refreshed, retag
 
@@ -274,6 +275,108 @@ def _reset_counts(cfg: config.Config) -> dict[str, int] | None:
   return {"tracks": one, "manual": manual, "answers": answers}
 
 
+def cmd_cookies(args: argparse.Namespace) -> int:
+  """Export YouTube cookies from a browser profile into a reusable file.
+
+  No extension needed. The point is not *how* the cookies are read but *which
+  profile* they are read from: YouTube rotates account cookies on open tabs, so
+  a profile you browse YouTube in invalidates its own exports. A profile that
+  is logged in and then left alone has nothing rotating it.
+
+  `--list` shows the profiles; `--profile` picks one; the result is written to
+  `youtube.cookie_file`, which the pipeline then uses verbatim and never
+  refreshes (SPEC.md §6).
+  """
+  from yt_dlp.cookies import extract_cookies_from_browser
+
+  cfg = config.load()
+  if args.list:
+    found = _chrome_profiles(cfg.youtube.cookie_browser)
+    if not found:
+      print(f"  no {cfg.youtube.cookie_browser} profiles found")
+      return 1
+    for directory, name in found:
+      print(f"  {directory:<12} {name}")
+    print("\n  a profile you browse YouTube in will keep invalidating itself;")
+    print("  make a second one, sign in, and leave it closed.")
+    return 0
+
+  destination = (
+    Path(args.out).expanduser() if args.out else youtube_cookie_path(cfg.youtube)
+  )
+  try:
+    jar = extract_cookies_from_browser(cfg.youtube.cookie_browser, profile=args.profile)
+  except Exception as exc:  # noqa: BLE001 - the message is the whole point
+    print(f"  could not read {cfg.youtube.cookie_browser}/{args.profile}: {exc}")
+    return 1
+
+  # Only what the job needs. A whole-profile export puts every site the user is
+  # signed into on disk in plain text; YouTube authentication lives on the
+  # google.com and youtube.com domains (SPEC.md §13).
+  for cookie in list(jar):
+    if not any(d in (cookie.domain or "") for d in COOKIE_DOMAINS):
+      jar.clear(cookie.domain, cookie.path, cookie.name)
+
+  names = {c.name for c in jar if "youtube" in (c.domain or "")}
+  authenticated = "LOGIN_INFO" in names and any(n.endswith("SAPISID") for n in names)
+  destination.parent.mkdir(parents=True, exist_ok=True)
+  jar.save(str(destination))
+  destination.chmod(0o600)
+
+  print(f"  wrote {len(jar)} cookies to {destination}")
+  if not authenticated:
+    print("  WARNING: no YouTube login found in that profile — sign in first")
+    return 1
+  print("  signed in to YouTube: yes")
+  if str(destination) != cfg.youtube.cookie_file:
+    print("\n  add this to ~/.config/musicpipeline/config.toml:")
+    print("    [youtube]")
+    print(f'    cookie_file = "{destination}"')
+  return 0
+
+
+# Domains carrying YouTube authentication. Every other site in the profile is
+# unrelated to this job and is dropped before the file is written.
+COOKIE_DOMAINS = ("youtube.com", "google.com", "ytimg.com", "googlevideo.com")
+
+# where `music cookies` writes when nothing else is configured. Never the repo:
+# an authenticated cookie jar is a credential (SPEC.md §13).
+CONFIG_COOKIES = config.CONFIG_HOME / "youtube-cookies.txt"
+
+
+def _chrome_profiles(browser: str) -> list[tuple[str, str]]:
+  """List a Chromium browser's profile directories and their display names.
+
+  Args:
+    browser: Browser name as yt-dlp spells it.
+
+  Returns:
+    Pairs of directory name and display name.
+  """
+  import json
+
+  roots = {
+    "chrome": "Google/Chrome",
+    "chromium": "Chromium",
+    "brave": "BraveSoftware/Brave-Browser",
+    "edge": "Microsoft Edge",
+  }
+  base = Path.home() / "Library" / "Application Support" / roots.get(browser, "")
+  if not base.is_dir():
+    return []
+  out = []
+  for directory in sorted(base.iterdir()):
+    preferences = directory / "Preferences"
+    if not preferences.is_file():
+      continue
+    try:
+      name = json.loads(preferences.read_text()).get("profile", {}).get("name", "")
+    except Exception:  # noqa: BLE001 - a name is cosmetic
+      name = ""
+    out.append((directory.name, name or "(unnamed)"))
+  return out
+
+
 def cmd_doctor(args: argparse.Namespace) -> int:
   """Check that the environment can actually run a job (SPEC.md §18)."""
   cfg = config.load()
@@ -291,12 +394,9 @@ def cmd_doctor(args: argparse.Namespace) -> int:
   print(f"  free disk  {free_gb:.0f} GB (library needs ~80 GB)")
   ok &= free_gb > 100
 
-  source = (
-    f"cookie_file {cfg.youtube.cookie_file}"
-    if cfg.youtube.cookie_file
-    else f"{cfg.youtube.cookie_browser} profile (rotates; see SPEC.md §6)"
-  )
-  print(f"  cookies    {source}")
+  jar_path = youtube_cookie_path(cfg.youtube)
+  state = "present" if jar_path.is_file() else "absent, will bootstrap"
+  print(f"  cookies    {jar_path} ({state})")
 
   if not args.offline:
     ok &= _check_premium_audio(cfg)
@@ -396,6 +496,16 @@ def build_parser() -> argparse.ArgumentParser:
     help="keep downloaded audio, so a rebuild needs no re-download",
   )
   reset.set_defaults(func=cmd_reset)
+
+  cookies = sub.add_parser(
+    "cookies", help="export youtube cookies from a browser profile"
+  )
+  cookies.add_argument("--list", action="store_true", help="list browser profiles")
+  cookies.add_argument(
+    "--profile", default="Default", help="profile directory name, e.g. 'Profile 1'"
+  )
+  cookies.add_argument("--out", default="", help="where to write the cookie file")
+  cookies.set_defaults(func=cmd_cookies)
 
   doctor = sub.add_parser("doctor", help="check tools, credentials and disk")
   doctor.add_argument(

@@ -1,4 +1,4 @@
-"""Cookie freshness (SPEC.md §6)."""
+"""Cookie persistence (SPEC.md §6)."""
 
 import pytest
 
@@ -7,56 +7,82 @@ from music.acquire import QualityError, VideoRef, youtube
 from music.config import Config, YouTubeConfig
 
 
-def test_a_jar_is_reused_within_one_run(monkeypatch):
-  """Once per run, not once per track.
+@pytest.fixture
+def jar(tmp_path, monkeypatch):
+  """Point the cookie jar at a temp path."""
+  path = tmp_path / "cookies.txt"
+  monkeypatch.setattr(youtube, "cookie_path", lambda cfg=None: path)
+  return path
 
-  Per-call extraction unlocks the keychain for every single download.
-  """
-  calls = []
 
-  class FakeJar(dict):
-    def save(self, path):
-      calls.append(path)
+class FakeJar(dict):
+  """Stands in for yt-dlp's cookie jar."""
 
-  monkeypatch.setattr(youtube, "_COOKIE_JAR", None)
+  def __init__(self, saves):
+    """Record saves into the given list."""
+    super().__init__()
+    self._saves = saves
+
+  def save(self, path):
+    """Record the save and write something recognisable."""
+    self._saves.append(path)
+    from pathlib import Path
+
+    Path(path).write_text("# Netscape HTTP Cookie File\n")
+
+
+def test_the_browser_is_read_once_to_bootstrap(jar, monkeypatch):
+  """Reading the browser is a bootstrap, not a routine."""
+  saves: list[str] = []
   monkeypatch.setattr(
-    "yt_dlp.cookies.extract_cookies_from_browser", lambda *a, **k: FakeJar()
+    "yt_dlp.cookies.extract_cookies_from_browser", lambda *a, **k: FakeJar(saves)
   )
   cfg = YouTubeConfig()
   first = youtube._cookie_jar(cfg)
   second = youtube._cookie_jar(cfg)
-  assert first == second
-  assert len(calls) == 1, "the browser was read more than once in a run"
+  assert first == second == jar
+  assert len(saves) == 1, "the browser was read again when a jar already existed"
 
 
-def test_refresh_forces_a_new_extraction(monkeypatch):
-  """YouTube rotates session cookies, and `music serve` stays up for days.
+def test_an_existing_jar_is_never_replaced_silently(jar, monkeypatch):
+  """yt-dlp writes rotations back into this file; re-reading undoes them.
 
-  The jar used to be cached for the life of the *process* while its docstring
-  claimed the life of the *run*.
+  Discarding the jar each run and re-reading the browser restored the older
+  browser copy and eventually failed authentication — on a machine where the
+  browser was never used for YouTube at all.
   """
-  calls = []
+  jar.write_text("# Netscape HTTP Cookie File\n# rotated by yt-dlp\n")
 
-  class FakeJar(dict):
-    def save(self, path):
-      calls.append(path)
+  def explode(*_a, **_k):
+    raise AssertionError("the browser must not be read when a jar exists")
 
-  monkeypatch.setattr(youtube, "_COOKIE_JAR", None)
+  monkeypatch.setattr("yt_dlp.cookies.extract_cookies_from_browser", explode)
+  assert youtube._cookie_jar(YouTubeConfig()) == jar
+  assert "rotated by yt-dlp" in jar.read_text()
+
+
+def test_refresh_is_the_recovery_path(jar, monkeypatch):
+  """It exists for an auth failure, not for every run."""
+  saves: list[str] = []
+  jar.write_text("# stale\n")
   monkeypatch.setattr(
-    "yt_dlp.cookies.extract_cookies_from_browser", lambda *a, **k: FakeJar()
+    "yt_dlp.cookies.extract_cookies_from_browser", lambda *a, **k: FakeJar(saves)
   )
-  cfg = YouTubeConfig()
-  first = youtube._cookie_jar(cfg)
   youtube.refresh_cookies()
-  second = youtube._cookie_jar(cfg)
-  assert first != second
-  assert not first.exists(), "the stale jar was left on disk"
-  assert len(calls) == 2
+  assert not jar.exists()
+  youtube._cookie_jar(YouTubeConfig())
+  assert len(saves) == 1
 
 
-def test_extraction_failure_falls_back_rather_than_losing_auth(monkeypatch):
-  """Per-call extraction still works; losing authentication does not."""
-  monkeypatch.setattr(youtube, "_COOKIE_JAR", None)
+def test_a_configured_cookie_file_wins():
+  """An exported file is used verbatim, wherever the user put it."""
+  cfg = YouTubeConfig(cookie_file="~/somewhere/cookies.txt")
+  assert youtube.cookie_path(cfg).name == "cookies.txt"
+  assert "~" not in str(youtube.cookie_path(cfg))
+
+
+def test_extraction_failure_falls_back_rather_than_losing_auth(jar, monkeypatch):
+  """Per-call browser extraction still works; losing authentication does not."""
   monkeypatch.setattr(
     "yt_dlp.cookies.extract_cookies_from_browser",
     lambda *a, **k: (_ for _ in ()).throw(RuntimeError("locked")),
@@ -66,18 +92,23 @@ def test_extraction_failure_falls_back_rather_than_losing_auth(monkeypatch):
   assert opts.get("cookiesfrombrowser"), "fell back to no cookies at all"
 
 
-# --- mid-run rotation ------------------------------------------------------
+def test_yt_dlp_is_given_a_file_so_it_can_write_rotations_back(jar, monkeypatch):
+  """`YoutubeDL.save_cookies` only persists when `cookiefile` is set."""
+  saves: list[str] = []
+  monkeypatch.setattr(
+    "yt_dlp.cookies.extract_cookies_from_browser", lambda *a, **k: FakeJar(saves)
+  )
+  opts = youtube._base_opts(YouTubeConfig())
+  assert opts.get("cookiefile") == str(jar)
+  assert not opts.get("cookiesfrombrowser")
+
+
+# --- mid-run recovery ------------------------------------------------------
 
 
 def test_a_downgraded_stream_retries_once_with_fresh_cookies(monkeypatch):
-  """A run takes hours; cookies can rotate part way through.
-
-  The symptom is specific — the best available stream drops below the bitrate
-  floor because YouTube is serving unauthenticated formats — so that signal is
-  what triggers a refresh, rather than a guessed interval.
-  """
-  attempts = []
-  refreshed = []
+  attempts: list[str] = []
+  refreshed: list[bool] = []
 
   def fake_download(video_id, dest, cfg, sink=None):  # noqa: ARG001
     attempts.append(video_id)
@@ -88,18 +119,22 @@ def test_a_downgraded_stream_retries_once_with_fresh_cookies(monkeypatch):
   monkeypatch.setattr(pipeline, "download", fake_download)
   monkeypatch.setattr(pipeline, "refresh_cookies", lambda: refreshed.append(True))
 
-  ref = VideoRef(video_id="x", title="T", channel="c", duration_s=1)
   got = pipeline._download_with_fresh_cookies(
-    ref, Config(), None, pipeline.LogBuffer(), pipeline.Progress()
+    VideoRef(video_id="x", title="T", channel="c", duration_s=1),
+    Config(),
+    None,
+    pipeline.LogBuffer(),
+    pipeline.Progress(),
   )
   assert got == "ok"
   assert len(attempts) == 2
   assert refreshed == [True]
 
 
-def test_it_gives_up_after_one_retry(monkeypatch):
-  """Fresh cookies not helping means the account, not the jar — say so."""
-  refreshed = []
+def test_the_refresh_happens_once_per_run_not_once_per_track(monkeypatch):
+  """Refreshing per failing track reads the keychain 2,329 times over a run."""
+  refreshed: list[bool] = []
+  state = pipeline.Progress()
 
   def always_bad(video_id, dest, cfg, sink=None):  # noqa: ARG001
     raise QualityError("still below the floor")
@@ -107,41 +142,13 @@ def test_it_gives_up_after_one_retry(monkeypatch):
   monkeypatch.setattr(pipeline, "download", always_bad)
   monkeypatch.setattr(pipeline, "refresh_cookies", lambda: refreshed.append(True))
 
-  with pytest.raises(QualityError):
-    pipeline._download_with_fresh_cookies(
-      VideoRef(video_id="x", title="T", channel="c", duration_s=1),
-      Config(),
-      None,
-      pipeline.LogBuffer(),
-      pipeline.Progress(),
-    )
-  assert len(refreshed) == 1, "refreshed on a loop instead of surfacing it"
-
-
-def test_the_refresh_happens_once_per_run_not_once_per_track():
-  """If every track is downgraded the jar is not the problem.
-
-  Refreshing per failing track would read the keychain 2,300 times over a full
-  library and turn one problem into a second one.
-  """
-  refreshed = []
-  state = pipeline.Progress()
-
-  def always_bad(video_id, dest, cfg, sink=None):  # noqa: ARG001
-    raise QualityError("still below the floor")
-
-  import pytest as _pytest
-
-  with _pytest.MonkeyPatch.context() as m:
-    m.setattr(pipeline, "download", always_bad)
-    m.setattr(pipeline, "refresh_cookies", lambda: refreshed.append(True))
-    for _ in range(5):
-      with _pytest.raises(QualityError):
-        pipeline._download_with_fresh_cookies(
-          VideoRef(video_id="x", title="T", channel="c", duration_s=1),
-          Config(),
-          None,
-          pipeline.LogBuffer(),
-          state,
-        )
+  for _ in range(5):
+    with pytest.raises(QualityError):
+      pipeline._download_with_fresh_cookies(
+        VideoRef(video_id="x", title="T", channel="c", duration_s=1),
+        Config(),
+        None,
+        pipeline.LogBuffer(),
+        state,
+      )
   assert len(refreshed) == 1, f"refreshed {len(refreshed)} times across one run"

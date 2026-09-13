@@ -5,10 +5,8 @@ available directly: `channel` and `description` drive art-track detection, and
 `abr` drives the quality gate (SPEC.md §6).
 """
 
-import atexit
 import logging
 import re
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -56,78 +54,78 @@ class Download:
     return self.channel.endswith(" - Topic") or (ART_TRACK_MARKER in self.description)
 
 
-_COOKIE_JAR: Path | None = None
-
-
 def refresh_cookies() -> None:
-  """Discard the extracted jar so the next call reads the browser again.
+  """Re-read the browser, replacing the stored jar.
 
-  Called at the start of every run. YouTube rotates session cookies, so a jar
-  extracted once and kept for the life of the process goes stale — and
-  `music serve` is a process that stays up for days. The previous version
-  cached per *process* while its own docstring claimed per *run*.
+  **Not called per run.** yt-dlp writes rotated cookies back to a cookie file
+  on exit (`YoutubeDL.save_cookies`), so a persistent jar keeps itself current
+  as YouTube rotates the session. Discarding it every run and re-reading the
+  browser threw those fresh cookies away and went back to the browser's stale
+  copy — which is what produced "The provided YouTube account cookies are no
+  longer valid" on a machine where nothing else was touching YouTube.
+
+  This is now the recovery path only: called when a download is downgraded
+  below the bitrate floor, and by `music cookies` when the user asks for it.
   """
-  global _COOKIE_JAR
-  # only the temp jar we extracted; an exported cookie_file belongs to the user
-  if _COOKIE_JAR is not None:
-    _COOKIE_JAR.unlink(missing_ok=True)
-  _COOKIE_JAR = None
+  jar = cookie_path()
+  jar.unlink(missing_ok=True)
+
+
+def cookie_path(cfg: YouTubeConfig | None = None) -> Path:
+  """Where the persistent cookie jar lives.
+
+  Args:
+    cfg: YouTube settings; `cookie_file` overrides the default location.
+
+  Returns:
+    The jar path. It is never inside the repository — an authenticated jar is
+    a credential (SPEC.md §13).
+  """
+  if cfg is not None and cfg.cookie_file:
+    return Path(cfg.cookie_file).expanduser()
+  return Path.home() / ".config" / "musicpipeline" / "youtube-cookies.txt"
 
 
 def _cookie_jar(cfg: YouTubeConfig) -> Path | None:
-  """Extract the browser's cookies once per run, into a private file.
+  """Return a cookie file for yt-dlp, creating it from the browser if needed.
 
-  `--cookies-from-browser` re-reads the browser's cookie store on *every*
-  yt-dlp call. On macOS that means unlocking the keychain and decrypting the
-  whole store once per track, which is slow, prompts the user, and reads far
-  more of their browsing data than the job needs.
+  A **file**, not `--cookies-from-browser`, because yt-dlp saves the jar back
+  to a cookiefile when it exits. YouTube rotates the session during a run; with
+  a file those rotations are persisted and the next run starts from current
+  cookies. With `--cookies-from-browser` they are discarded and the browser's
+  older copy is read again, which eventually fails authentication even when the
+  browser is never used for YouTube at all.
 
-  Once per *run* is the right unit: cheap enough to be invisible (0.15 s
-  measured), and fresh enough that rotation between runs is picked up.
-  `refresh_cookies` is what makes a run a run.
-
-  The jar lives in a private temp file, mode 600, deleted at exit. It is never
-  written into the repository or the config directory — it is an authenticated
-  credential (SPEC.md §13).
+  Reading the browser is therefore a bootstrap, not a routine: it happens once,
+  when no jar exists yet.
 
   Args:
-    cfg: YouTube settings, for which browser to read.
+    cfg: YouTube settings.
 
   Returns:
-    Path to the cookie file, or None if extraction failed — in which case the
-    caller falls back to per-call extraction rather than losing authentication.
+    Path to the cookie file, or None if it could not be created — in which case
+    the caller falls back to per-call browser extraction rather than losing
+    authentication entirely.
   """
-  global _COOKIE_JAR
-  # An exported file wins and is never refreshed: it is the user's, and it came
-  # from a session nothing is rotating. Re-reading the live profile is the
-  # thing that breaks.
-  if cfg.cookie_file:
-    exported = Path(cfg.cookie_file).expanduser()
-    if exported.is_file():
-      return exported
-    log.warning("cookie_file %s does not exist; falling back to the browser", exported)
+  jar = cookie_path(cfg)
+  if jar.is_file() and jar.stat().st_size > 0:
+    return jar
 
-  if _COOKIE_JAR is not None and _COOKIE_JAR.exists():
-    return _COOKIE_JAR
   try:
     from yt_dlp.cookies import extract_cookies_from_browser
 
-    jar = extract_cookies_from_browser(cfg.cookie_browser)
-    handle = tempfile.NamedTemporaryFile(  # noqa: SIM115 - lives for the run
-      prefix="music-cookies-", suffix=".txt", delete=False
-    )
-    handle.close()
-    path = Path(handle.name)
-    path.chmod(0o600)
-    jar.save(str(path))
+    extracted = extract_cookies_from_browser(cfg.cookie_browser)
+    jar.parent.mkdir(parents=True, exist_ok=True)
+    extracted.save(str(jar))
+    jar.chmod(0o600)
   except Exception as exc:  # noqa: BLE001 - fall back rather than lose auth
-    log.warning("could not pre-extract cookies (%s); falling back per call", exc)
+    log.warning("could not read %s cookies (%s)", cfg.cookie_browser, exc)
     return None
 
-  log.info("extracted %d cookies from %s", len(jar), cfg.cookie_browser)
-  atexit.register(lambda: path.unlink(missing_ok=True))
-  _COOKIE_JAR = path
-  return path
+  log.info(
+    "bootstrapped %d cookies from %s into %s", len(extracted), cfg.cookie_browser, jar
+  )
+  return jar
 
 
 def _base_opts(cfg: YouTubeConfig, sink: object | None = None) -> dict[str, object]:
