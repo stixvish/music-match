@@ -57,6 +57,14 @@ def _skips_consensus(family: str, field: str) -> bool:
   return field in JUDGEMENT_FIELDS or field in CONVENTION_FIELDS.get(family, ())
 
 
+# Decisions the resolver must never overrule. `manual` is a human editing a
+# field; `url_override` is a human pasting a link, which §12 scores at 1.00 —
+# the highest evidence tier there is. Only `manual` was protected, so pressing
+# Re-tag after pasting a link ran arbitration straight over the link's values
+# and the track reverted in front of the user.
+PROTECTED = ("manual", "url_override")
+_PROTECTED_SQL = ", ".join(f"'{d}'" for d in PROTECTED)
+
 # dates are not chosen by precedence. SPEC.md §7 wants the *earliest* release
 # of the recording, and sources disagree in both value and precision: for
 # "Tum Hi Ho" musicbrainz returned a bare "2013" while itunes returned
@@ -778,17 +786,20 @@ def persist(
   Returns:
     How many fields were written.
   """
-  manual = {
+  protected = {
     row["field"]
     for row in conn.execute(
-      "SELECT field FROM resolved_field WHERE track_id = ? AND decided_by = 'manual'",
+      "SELECT field FROM resolved_field WHERE track_id = ?"
+      f" AND decided_by IN ({_PROTECTED_SQL})",
       (track_id,),
     )
   }
   written = 0
   for decision in decisions:
-    if decision.field in manual:
-      continue  # a human decided this; the resolver never overrules it (§15)
+    if decision.field in protected:
+      # a human decided this, by hand or by pasting a link; the resolver never
+      # overrules either (SPEC.md §15)
+      continue
     conn.execute(
       "INSERT OR REPLACE INTO resolved_field"
       " (track_id, field, value, source, decided_by) VALUES (?,?,?,?,?)",
@@ -842,14 +853,15 @@ def rearbitrate(conn: sqlite3.Connection, track_id: int) -> int:
       "SELECT field, value, decided_by FROM resolved_field WHERE track_id = ?",
       (track_id,),
     )
-    if r["decided_by"] != "manual"
+    if r["decided_by"] not in PROTECTED
   }
   decisions = arbitrate(candidates, family=row["genre_family"] or "other")
   # a field that no longer resolves must not keep its stale value: dropping a
   # compilation album means the album really is unknown now.
   keep = {d.field for d in decisions}
   conn.execute(
-    "DELETE FROM resolved_field WHERE track_id = ? AND decided_by != 'manual'",
+    "DELETE FROM resolved_field WHERE track_id = ?"
+    f" AND decided_by NOT IN ({_PROTECTED_SQL})",
     (track_id,),
   )
   persist(conn, track_id, decisions)

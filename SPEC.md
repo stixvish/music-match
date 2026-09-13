@@ -1268,6 +1268,32 @@ database.
 files missing — rather than a bare count. "I hit retag and I don't know if it
 did what I wanted" is a reporting failure as much as a functional one.
 
+### a pasted link has to survive Re-tag
+
+`persist` protected only `decided_by = 'manual'`, and a link writes
+`url_override`. So pressing Re-tag ran arbitration straight over every value the
+link had supplied, and the track reverted on screen — the exact thing a link is
+pasted to prevent. `rearbitrate` was worse: it deleted everything that was not
+`manual`, links included.
+
+`PROTECTED = ("manual", "url_override")` now covers both. §12 already scored a
+pasted link at 1.00, the highest evidence tier there is; the persistence layer
+simply did not know that.
+
+Verified end to end against the real library with
+`open.spotify.com/track/4XoixmemUvnf5ooowJ62kc`:
+
+```
+after the link   album  Nothing but the Beat (Ultimate Edition)  url_override
+after Re-tag     album  Nothing but the Beat (Ultimate Edition)  url_override
+on disk          TALB   Nothing but the Beat (Ultimate Edition)
+                 TIT2   Night of Your Life (ft. Jennifer Hudson)
+                 APIC   71,510 bytes, replaced
+```
+
+A manual edit still outranks a link: both are the user, and the field they
+typed is the one in front of them.
+
 ### a pasted link has to be visible
 
 The link endpoint fetched the entity and wrote every field as `url_override`,
