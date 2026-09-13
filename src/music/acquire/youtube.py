@@ -7,7 +7,11 @@ available directly: `channel` and `description` drive art-track detection, and
 
 import logging
 import re
+import shutil
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
+from http.cookiejar import MozillaCookieJar
 from pathlib import Path
 
 import yt_dlp
@@ -71,6 +75,72 @@ def refresh_cookies() -> None:
   jar.unlink(missing_ok=True)
 
 
+# yt-dlp's own test for a usable YouTube session (`_has_auth_cookies`):
+# LOGIN_INFO plus a SAPISID variant. YouTube clears LOGIN_INFO when it
+# de-authenticates a session, and leaves the SAPISID family behind, so the
+# presence of SAPISID alone proves nothing.
+def is_authenticated(jar: Path) -> bool:
+  """Whether a cookie file carries a live YouTube login.
+
+  Args:
+    jar: Path to a Netscape-format cookie file.
+
+  Returns:
+    True if the file would authenticate. False if it is missing, unreadable,
+    or has been de-authenticated.
+  """
+  if not jar.is_file() or jar.stat().st_size == 0:
+    return False
+  parsed = MozillaCookieJar(str(jar))
+  try:
+    parsed.load(ignore_discard=True, ignore_expires=True)
+  except Exception:  # noqa: BLE001 - a corrupt jar is simply not authenticated
+    return False
+  names = {c.name for c in parsed if "youtube" in (c.domain or "")}
+  return "LOGIN_INFO" in names and any("APISID" in n for n in names)
+
+
+@contextmanager
+def preserve_authentication(jar: Path | None) -> Iterator[None]:
+  """Keep an authenticated jar authenticated across a yt-dlp run.
+
+  yt-dlp saves the cookie jar back to `cookiefile` on exit, which is what keeps
+  a rotating session current. But when YouTube *de-authenticates* the session
+  it clears LOGIN_INFO, and writing that back destroys the export permanently:
+  the next run no longer looks authenticated, so yt-dlp stops warning about it
+  and quietly downloads a 128 kbps anonymous stream instead.
+
+  Rotation is recoverable and must be persisted; de-authentication is not, and
+  must not be. Measured against a live Chrome profile, a freshly exported jar
+  lost LOGIN_INFO on its first request and itag 141 disappeared with it.
+
+  Args:
+    jar: The cookie file yt-dlp will write to, or None.
+
+  Yields:
+    None.
+  """
+  if jar is None or not is_authenticated(jar):
+    yield
+    return
+  backup = jar.with_suffix(jar.suffix + ".authenticated")
+  shutil.copy2(jar, backup)
+  try:
+    yield
+  finally:
+    if is_authenticated(jar):
+      backup.unlink(missing_ok=True)
+    else:
+      shutil.copy2(backup, jar)
+      backup.unlink(missing_ok=True)
+      log.warning(
+        "youtube de-authenticated the session mid-run and the jar was kept "
+        "rather than overwritten. re-export with `music cookies` from a "
+        "profile that has no youtube tab open: %s",
+        jar,
+      )
+
+
 def cookie_path(cfg: YouTubeConfig | None = None) -> Path:
   """Where the persistent cookie jar lives.
 
@@ -114,7 +184,9 @@ def _cookie_jar(cfg: YouTubeConfig) -> Path | None:
   try:
     from yt_dlp.cookies import extract_cookies_from_browser
 
-    extracted = extract_cookies_from_browser(cfg.cookie_browser)
+    extracted = extract_cookies_from_browser(
+      cfg.cookie_browser, profile=cfg.cookie_profile or None
+    )
     jar.parent.mkdir(parents=True, exist_ok=True)
     extracted.save(str(jar))
     jar.chmod(0o600)
@@ -126,6 +198,66 @@ def _cookie_jar(cfg: YouTubeConfig) -> Path | None:
     "bootstrapped %d cookies from %s into %s", len(extracted), cfg.cookie_browser, jar
   )
   return jar
+
+
+def verify_cookies(jar: Path, cfg: YouTubeConfig, video_id: str) -> tuple[bool, str]:
+  """Prove a cookie jar authenticates, instead of assuming that it will.
+
+  A jar can hold every cookie a login needs and still be dead on arrival. If
+  the profile it was exported from has a live YouTube session, YouTube rotates
+  on the very first request, clears LOGIN_INFO, and the premium formats go with
+  it. Nothing about the file itself reveals this — checking that the cookies
+  are *present* at export time passes, and the failure only surfaces later as a
+  download rejected against the bitrate floor.
+
+  The probe runs against a copy, so verifying a jar can never damage it.
+
+  Args:
+    jar: The cookie file to check.
+    cfg: YouTube settings.
+    video_id: A video to probe with. Metadata only; nothing is downloaded.
+
+  Returns:
+    Whether the jar authenticates, and a one-line reason either way.
+  """
+  if not is_authenticated(jar):
+    return False, "no youtube login in the file"
+
+  probe = jar.with_suffix(jar.suffix + ".probe")
+  shutil.copy2(jar, probe)
+  opts = _base_opts(cfg) | {
+    "cookiefile": str(probe),
+    "skip_download": True,
+    "quiet": True,
+    "no_warnings": True,
+    # no format chain: selection would fail before the formats can be
+    # inspected, reporting "Requested format is not available" instead of the
+    # reason itag 141 is missing. That reason is the whole point here.
+    "format": None,
+  }
+  info: dict | None = None
+  failure: Exception | None = None
+  try:
+    with yt_dlp.YoutubeDL(opts) as ydl:
+      info = ydl.extract_info(
+        f"https://www.youtube.com/watch?v={video_id}", download=False
+      )
+  except Exception as exc:  # noqa: BLE001 - the message is the diagnostic
+    failure = exc
+  survived = is_authenticated(probe)
+  probe.unlink(missing_ok=True)
+
+  if failure is not None:
+    return False, f"probe failed: {str(failure)[:120]}"
+  if not survived:
+    return False, (
+      "youtube cleared the login on the first request — the profile it came "
+      "from has a live youtube session that rotated it"
+    )
+  offered = {str(f.get("format_id") or "") for f in (info or {}).get("formats") or []}
+  if not any(f.startswith("141") for f in offered):
+    return False, "authenticated, but itag 141 (premium audio) was not offered"
+  return True, "authenticated; itag 141 offered"
 
 
 def _base_opts(cfg: YouTubeConfig, sink: object | None = None) -> dict[str, object]:
@@ -263,8 +395,13 @@ def download(
   opts = _base_opts(cfg, sink) | {"outtmpl": str(dest / "%(id)s.%(ext)s")}
   url = f"https://www.youtube.com/watch?v={video_id}"
 
+  # the file yt-dlp itself will write back to, as it resolved it
+  written_jar = opts.get("cookiefile")
   try:
-    with yt_dlp.YoutubeDL(opts) as ydl:
+    with (
+      preserve_authentication(Path(str(written_jar)) if written_jar else None),
+      yt_dlp.YoutubeDL(opts) as ydl,
+    ):
       info = ydl.extract_info(url, download=True)
   except yt_dlp.utils.DownloadError as exc:
     # carry yt-dlp's own words: they name the cause, and the caller logs them

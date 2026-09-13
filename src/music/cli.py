@@ -289,6 +289,8 @@ def cmd_cookies(args: argparse.Namespace) -> int:
   """
   from yt_dlp.cookies import extract_cookies_from_browser
 
+  from music.acquire.youtube import verify_cookies
+
   cfg = config.load()
   if args.list:
     found = _chrome_profiles(cfg.youtube.cookie_browser)
@@ -328,10 +330,33 @@ def cmd_cookies(args: argparse.Namespace) -> int:
     print("  WARNING: no YouTube login found in that profile — sign in first")
     return 1
   print("  signed in to YouTube: yes")
+
+  # Holding the right cookies is not the same as being able to use them. A
+  # profile with a live YouTube session has its cookies rotated on the first
+  # request, which clears LOGIN_INFO and takes the premium formats with it —
+  # so an export that looks perfect here can already be dead. Say so now,
+  # rather than let it surface later as a download below the bitrate floor.
+  if args.no_verify:
+    print("  not verified (--no-verify)")
+    return 0
+  print("  verifying against YouTube…")
+  ok, reason = verify_cookies(destination, cfg.youtube, PROBE_VIDEO)
+  print(f"  {'verified' if ok else 'NOT USABLE'}: {reason}")
+  if not ok:
+    print("\n  export from a profile with no YouTube session of its own:")
+    print("    1. chrome > profile menu > Add > sign in to YouTube there")
+    print("    2. in that same tab, go to https://www.youtube.com/robots.txt")
+    print("    3. close that profile's window and leave it closed")
+    print("    4. music cookies --list, then --profile <that one>")
+    print("\n  (yt-dlp's own advice is a private window, but its cookies live")
+    print("   in memory and never reach the profile this reads.)")
+    return 1
   if str(destination) != cfg.youtube.cookie_file:
     print("\n  add this to ~/.config/musicpipeline/config.toml:")
     print("    [youtube]")
     print(f'    cookie_file = "{destination}"')
+    if args.profile:
+      print(f'    cookie_profile = "{args.profile}"')
   return 0
 
 
@@ -505,6 +530,9 @@ def build_parser() -> argparse.ArgumentParser:
     "--profile", default="Default", help="profile directory name, e.g. 'Profile 1'"
   )
   cookies.add_argument("--out", default="", help="where to write the cookie file")
+  cookies.add_argument(
+    "--no-verify", action="store_true", help="skip the live check against YouTube"
+  )
   cookies.set_defaults(func=cmd_cookies)
 
   doctor = sub.add_parser("doctor", help="check tools, credentials and disk")

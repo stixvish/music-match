@@ -1481,6 +1481,53 @@ it was the failure itself: metadata extraction and format listing both worked,
 so the cookies were not simply "expired" — they were being rotated out from
 under an otherwise healthy session.
 
+### a de-authenticated jar must not be written back
+
+Letting yt-dlp save the jar on exit is what keeps a rotating session current,
+and that is right for *rotation*. It is wrong for *de-authentication*. When
+YouTube ends a session it clears `LOGIN_INFO` and leaves the SAPISID family
+in place; saving that back is unrecoverable, because `_has_auth_cookies` is
+then false, `_passed_auth_cookies` is never armed, and **yt-dlp stops warning
+at all**. The run downloads an anonymous 128 kbps stream instead, and the only
+symptom reaching the user is a `QualityError` about the bitrate floor, hours
+later and pointing at the wrong thing.
+
+Measured 2026-09-12 against Chrome's live default profile, on a jar exported
+seconds earlier:
+
+```
+before run: LOGIN_INFO present = True
+[debug] [youtube] Found YouTube account cookies
+[youtube] The provided YouTube account cookies are no longer valid...
+after run:  LOGIN_INFO present = False
+itag 141 offered: False
+```
+
+One request. The export is dead on arrival because the profile it came from
+has a live YouTube session, and the two clients rotate each other out.
+`preserve_authentication()` therefore restores the pre-run jar whenever a run
+ends de-authenticated, so a session that YouTube ends costs one run rather
+than the export.
+
+### an export is verified, not assumed
+
+Checking that `LOGIN_INFO` is *present* in the written file passes in exactly
+the case above — the cookies are all there and none of them work. `music
+cookies` now makes one metadata-only request with a **copy** of the jar and
+reports what actually happened: the login cleared on first use, itag 141 not
+offered, or verified. `--no-verify` skips it. Exit status is non-zero for an
+export that cannot be used, so this cannot be missed in scrollback.
+
+`youtube.cookie_profile` records which profile the jar came from, so the
+bootstrap and `refresh_cookies()` re-read *that* profile rather than the
+default one — without it, the dedicated-profile remedy is undone by the first
+refresh.
+
+Note the gap in yt-dlp's own advice: a private window's cookies live in memory
+and never reach the profile database, so no profile reader — ours included —
+can export them. A second browser profile, signed in and then left closed,
+satisfies the same invariant (no open YouTube tab) and *can* be read.
+
 ### cookies are extracted once per run
 
 `--cookies-from-browser chrome` was passed on every yt-dlp call, so the browser
