@@ -54,6 +54,11 @@ class YouTubeConfig:
   # was exported from that profile. A private session that is closed and never
   # reopened has nothing to rotate it (SPEC.md §6).
   cookie_file: str = ""
+  # Which browser profile the jar is bootstrapped and refreshed from. The
+  # default profile is the one you are signed into and browsing in, so YouTube
+  # rotates its session and de-authenticates whatever was exported from it.
+  # A profile that is signed in and then left closed has nothing rotating it.
+  cookie_profile: str = ""
   # 141 (aac 44.1k) is preferred over 774 (opus 48k, resampled). SPEC.md §4.
   format_chain: str = "141/774/140/251"
   player_client: str = "web_music"

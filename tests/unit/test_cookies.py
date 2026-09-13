@@ -152,3 +152,90 @@ def test_the_refresh_happens_once_per_run_not_once_per_track(monkeypatch):
         state,
       )
   assert len(refreshed) == 1, f"refreshed {len(refreshed)} times across one run"
+
+
+NETSCAPE_HEADER = "# Netscape HTTP Cookie File\n"
+
+
+def _write_jar(path, names, domain=".youtube.com"):
+  """Write a Netscape cookie file holding exactly `names`."""
+  lines = [NETSCAPE_HEADER]
+  for name in names:
+    lines.append(f"{domain}\tTRUE\t/\tTRUE\t2000000000\t{name}\tvalue\n")
+  path.write_text("".join(lines))
+  return path
+
+
+AUTHENTICATED = ("LOGIN_INFO", "__Secure-3PAPISID", "PREF")
+# what YouTube leaves behind when it de-authenticates: SAPISID survives,
+# LOGIN_INFO does not (yt_dlp/extractor/youtube/_base.py, _has_auth_cookies).
+DEAUTHENTICATED = ("__Secure-3PAPISID", "PREF")
+
+
+def test_a_jar_without_login_info_is_not_authenticated(tmp_path):
+  assert youtube.is_authenticated(_write_jar(tmp_path / "a.txt", AUTHENTICATED))
+  assert not youtube.is_authenticated(_write_jar(tmp_path / "b.txt", DEAUTHENTICATED))
+
+
+def test_a_missing_or_empty_jar_is_not_authenticated(tmp_path):
+  assert not youtube.is_authenticated(tmp_path / "nope.txt")
+  empty = tmp_path / "empty.txt"
+  empty.write_text("")
+  assert not youtube.is_authenticated(empty)
+
+
+def test_rotation_is_persisted(tmp_path):
+  """A rotated-but-still-logged-in jar is exactly what we want to keep."""
+  path = _write_jar(tmp_path / "c.txt", AUTHENTICATED)
+  with youtube.preserve_authentication(path):
+    _write_jar(path, (*AUTHENTICATED, "ROTATED"))
+  names = path.read_text()
+  assert "ROTATED" in names, "a rotation must survive the run"
+  assert youtube.is_authenticated(path)
+
+
+def test_de_authentication_is_not_persisted(tmp_path):
+  """Writing back a cleared login destroys the export permanently.
+
+  Once LOGIN_INFO is gone, yt-dlp no longer considers the jar authenticated,
+  so it stops warning and quietly downloads an anonymous 128 kbps stream —
+  which surfaces much later as a QualityError with no obvious cause.
+  """
+  path = _write_jar(tmp_path / "d.txt", AUTHENTICATED)
+  with youtube.preserve_authentication(path):
+    _write_jar(path, DEAUTHENTICATED)  # yt-dlp saves the cleared jar
+  assert youtube.is_authenticated(path), "the export must survive a de-auth"
+  assert not (tmp_path / "d.txt.authenticated").exists(), "no backup left behind"
+
+
+def test_an_unauthenticated_jar_is_left_alone(tmp_path):
+  """Nothing to protect, so nothing is restored."""
+  path = _write_jar(tmp_path / "e.txt", DEAUTHENTICATED)
+  with youtube.preserve_authentication(path):
+    _write_jar(path, ("SOMETHING_NEW",))
+  assert "SOMETHING_NEW" in path.read_text()
+
+
+def test_preserving_a_missing_jar_is_a_noop():
+  with youtube.preserve_authentication(None):
+    pass
+
+
+def test_verify_rejects_a_jar_with_no_login_without_touching_the_network(tmp_path):
+  path = _write_jar(tmp_path / "f.txt", DEAUTHENTICATED)
+  ok, reason = youtube.verify_cookies(path, YouTubeConfig(), "never-fetched")
+  assert not ok
+  assert "no youtube login" in reason
+
+
+def test_the_configured_profile_is_used_to_bootstrap(jar, monkeypatch):
+  """A dedicated profile is the whole remedy; re-reading Default undoes it."""
+  seen = {}
+
+  def fake_extract(browser, profile=None, **kwargs):
+    seen["browser"], seen["profile"] = browser, profile
+    return FakeJar({"LOGIN_INFO": "x"})
+
+  monkeypatch.setattr("yt_dlp.cookies.extract_cookies_from_browser", fake_extract)
+  youtube._cookie_jar(YouTubeConfig(cookie_profile="Profile 1"))
+  assert seen == {"browser": "chrome", "profile": "Profile 1"}
